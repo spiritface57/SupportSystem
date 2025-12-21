@@ -4,6 +4,8 @@ namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\File;
+use Illuminate\Support\Facades\Http;
+
 
 class UploadFinalizeController extends Controller
 {
@@ -59,6 +61,31 @@ class UploadFinalizeController extends Controller
                 'written' => $written,
             ], 400);
         }
+        // v0.3: scaffold scanner interaction
+        $scannerResponse = Http::timeout(config('scanner.timeout'))
+            ->post(config('scanner.base_url') . '/scan', [
+                'upload_id'   => $uploadId,
+                'filename'    => $filename,
+                'total_bytes' => $written,
+            ]);
+
+        if (!$scannerResponse->ok()) {
+            return response()->json([
+                'error'  => 'scan_failed',
+                'reason' => 'scanner_unavailable',
+            ], 502);
+        }
+
+        $status = $scannerResponse->json('status');
+
+        if ($status !== 'clean') {
+            return response()->json([
+                'error'  => 'scan_failed',
+                'status' => $status,
+            ], 400);
+        }
+        // ---------------------------
+
 
         // cleanup (best effort)
         File::deleteDirectory($chunksDir);
