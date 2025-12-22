@@ -6,6 +6,8 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\ValidationException;
+use App\Support\UploadEventEmitter;
+
 
 class UploadInitController extends Controller
 {
@@ -19,7 +21,16 @@ class UploadInitController extends Controller
             ]);
 
             $uploadId = (string) Str::uuid();
-
+            UploadEventEmitter::emit(
+                'upload.initiated',
+                $uploadId,
+                'api',
+                [
+                    'filename'    => $data['filename'],
+                    'total_bytes' => $data['total_bytes'],
+                    'chunk_bytes' => $data['chunk_bytes'],
+                ]
+            );
             // v0.1: no persistence, no guarantees
             // just acknowledge intent
 
