@@ -1,0 +1,52 @@
+# ======================
+# Global
+# ======================
+.DS_Store
+Thumbs.db
+
+.idea/
+.vscode/
+
+# ======================
+# Laravel
+# ======================
+/services/api/vendor/
+/services/api/node_modules/
+
+.services/api/.env
+/services/api/.env.*
+!/services/api/.env.example
+
+/services/api/storage/app/*
+!/services/api/storage/app/.gitignore
+/services/api/storage/framework/*
+/services/api/storage/logs/*
+
+/services/api/bootstrap/cache/*
+
+# ======================
+# Node.js (scanner)
+# ======================
+/services/scanner-node/node_modules/
+/services/scanner-node/npm-debug.log*
+/services/scanner-node/yarn-error.log*
+
+# ======================
+# Upload runtime data
+# ======================
+/services/api/storage/app/uploads*
+/services/api/storage/app/uploads_tmp*
+/services/api/storage/app/uploads_final*
+
+# ======================
+# Docker
+# ======================
+/docker-compose.override.yml
+/docker/*.local.*
+
+# ======================
+# Logs
+# ======================
+*.log
+
+files/

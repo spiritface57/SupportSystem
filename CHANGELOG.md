@@ -54,7 +54,7 @@ Post 08 -- File Upload & Chunking
 
 -   Basic collision handling for duplicate `upload_id` or existing output file.
 
--   Upload session is marked as completed or failed.
+-   Upload session finalize result is returned as completed or failed.
 
 -   Temporary chunk files are cleaned up after finalize.
 
@@ -96,58 +96,109 @@ Post 08 -- File Upload & Chunking
 
 
 
-### v0.3 -- Streaming Scan (Node.js + ClamAV) + Backpressure + Timeouts
+## v0.3 -- Streaming Scan (Node.js + ClamAV) + Backpressure + Timeouts
 
 **Scope**
 
--   A dedicated **Node.js scanning service** is introduced as a separate process boundary.
+-   A dedicated **Node.js scanner service** is introduced as a separate process boundary from the Laravel API.
 
--   Upload finalize flow triggers **streaming scan** through the scanner service.
+-   The upload **finalize** flow triggers a **streaming virus scan** via the scanner service.
 
--   Scanner performs **stream-based scanning** (no "write full file then scan" in the API service).
+-   The scanner uses **ClamAV INSTREAM protocol** to scan incoming bytes as a stream.
 
--   **No shared disk** is required between Laravel API and scanner service.
+-   The API **does not scan files locally** and does not rely on a shared filesystem for scanning.
 
--   **Timeouts** are enforced for scan requests to prevent indefinite hangs.
+-   **No shared disk exists between services**:
 
--   **Backpressure** is applied so the system slows down safely under scanner load.
+    -   The API may assemble chunks into a local temporary file.
 
--   Clear scan outcomes are returned:
+    -   The scanner never mounts or reads API filesystem paths.
 
-    -   `clean`
+    -   All scan data is transferred over a socket stream.
 
-    -   `infected`
+-   Scan results are returned as **semantic outcomes**, not transport errors:
 
-    -   `error` (timeout, scanner unavailable, internal error)
+    -   `clean` -- scan completed successfully, file is safe
+
+    -   `infected` -- scan completed successfully, malware detected
+
+    -   `error` -- scan did not complete successfully
+
+-   **Timeouts** are enforced on scan requests to prevent hanging finalize operations.
+
+-   **Backpressure** is enforced via scanner concurrency limits:
+
+    -   When scanner capacity is exceeded, new scan requests are rejected immediately.
+
+    -   This prevents latency collapse and resource exhaustion.
+
+* * * * *
 
 **Explicit Non-Goals**
 
--   ❌ No advanced threat detection beyond ClamAV.
+-   ❌ No advanced threat detection beyond ClamAV signature scanning.
 
--   ❌ No full content validation (file-type sniffing, magic bytes rules, PDF parsing, etc.).
+-   ❌ No file-type validation, magic byte inspection, or content parsing.
 
--   ❌ No "exactly-once" guarantees for scan requests.
+-   ❌ No cryptographic integrity checks (checksums, hashes).
 
--   ❌ No perfect concurrency safety across duplicate finalize calls.
+-   ❌ No exactly-once guarantees for scan requests.
+
+-   ❌ No strict idempotency or full concurrency safety for duplicate finalize calls.
 
 -   ❌ No distributed transactions or rollback guarantees.
 
--   ❌ No production-grade observability (full metrics dashboards) yet.
+-   ❌ No persistent scan state machine.
+
+-   ❌ No production-grade observability (metrics dashboards, tracing, alerting).
+
+* * * * *
 
 **Failure Behavior**
 
--   If scanner is unavailable, finalize may return a failure state (or "scan_pending" if implemented later).
+-   **Scanner unavailable**
 
--   If scanning times out, finalize returns failure with an explicit timeout reason.
+    -   Finalize returns a failure response with reason `scanner_unavailable`.
 
--   Backpressure may reject or delay requests under high load to protect the system.
+    -   The file is **not promoted** to a final state.
 
--   A partial file may exist temporarily, but should not be promoted to "final" without a clean scan.
+-   **Scan timeout**
+
+    -   Finalize returns a failure response with reason `scan_timeout`.
+
+    -   The file is **not promoted**.
+
+-   **Backpressure triggered**
+
+    -   Scanner rejects the request with reason `scanner_busy`.
+
+    -   Finalize fails fast instead of blocking or queueing.
+
+-   **Unexpected scanner response**
+
+    -   Finalize returns failure with an explicit error reason.
+
+    -   The file remains untrusted.
+
+-   Temporary files **may exist locally** on the API during or after failure,\
+    but **promotion to a final state only occurs after a clean scan result**.
+
+* * * * *
 
 **Notes**
 
--   The primary goal is **failure containment**: scanner failure must not crash the API process.
+-   The primary goal of this version is **failure containment**:
 
--   "Streaming" means the API does not depend on shared local filesystems to scan content.
+    -   Scanner failures must not crash, block, or destabilize the API process.
 
--   This version prioritizes controlled degradation over throughput.
+-   Scan outcomes (`clean`, `infected`) are **domain results**, not errors.\
+    Transport-level failures are handled separately.
+
+-   File locking and concurrent write protection are **intentionally out of scope**:
+
+    -   Finalize assumes all chunks have been fully written before scanning begins.
+
+    -   Concurrent writes during finalize are considered undefined behavior.
+
+-   This version prioritizes **controlled degradation over throughput**.\
+    Rejecting work safely is preferred to accepting work unsafely.

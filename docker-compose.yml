@@ -1,0 +1,17 @@
+
+services:
+  api:
+    image: php:8.3-cli
+    container_name: support-api
+    working_dir: /var/www
+    volumes:
+      - ./services/api:/var/www
+    command: php artisan serve --host=0.0.0.0 --port=8000
+    ports:
+      - "8000:8000"
+
+  scanner:
+    build: ./services/scanner-node
+    container_name: scanner-service
+    ports:
+      - "3001:3001"
