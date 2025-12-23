@@ -81,7 +81,18 @@ class UploadFinalizeController extends Controller
             /* -------------------------------
              * Scan gate
              * ------------------------------- */
-            $hash = hash_file('sha256', $tempAssembledPath);
+
+            // 🔵 v0.4: scan lifecycle start
+            UploadEventEmitter::emit(
+                'upload.scan.started',
+                $uploadId,
+                'api',
+                [
+                    'engine' => 'clamav',
+                ]
+            );
+
+            $hash   = hash_file('sha256', $tempAssembledPath);
             $stream = fopen($tempAssembledPath, 'rb');
 
             $scannerResponse = Http::timeout(config('scanner.timeout'))
@@ -93,12 +104,32 @@ class UploadFinalizeController extends Controller
             fclose($stream);
 
             if ($scannerResponse->failed()) {
+                // 🔵 v0.4: scan failed
+                UploadEventEmitter::emit(
+                    'upload.scan.failed',
+                    $uploadId,
+                    'api',
+                    [
+                        'reason' => 'scanner_unavailable',
+                    ]
+                );
+
                 throw new \RuntimeException('scanner_unavailable');
             }
 
             $body = $scannerResponse->json();
 
             if (!is_array($body) || !isset($body['status'])) {
+                // 🔵 v0.4
+                UploadEventEmitter::emit(
+                    'upload.scan.failed',
+                    $uploadId,
+                    'api',
+                    [
+                        'reason' => 'scanner_invalid_response',
+                    ]
+                );
+
                 throw new \RuntimeException('scanner_invalid_response');
             }
 
@@ -112,12 +143,42 @@ class UploadFinalizeController extends Controller
                     'ip'        => $request->ip(),
                 ]);
 
+                // 🔵 v0.4
+                UploadEventEmitter::emit(
+                    'upload.scan.failed',
+                    $uploadId,
+                    'api',
+                    [
+                        'reason' => 'infected_file',
+                    ]
+                );
+
                 throw new \RuntimeException('infected_file');
             }
 
             if ($body['status'] !== 'clean') {
+                // 🔵 v0.4
+                UploadEventEmitter::emit(
+                    'upload.scan.failed',
+                    $uploadId,
+                    'api',
+                    [
+                        'reason' => 'scanner_unknown_state',
+                    ]
+                );
+
                 throw new \RuntimeException('scanner_unknown_state');
             }
+
+            // 🔵 v0.4: scan completed successfully
+            UploadEventEmitter::emit(
+                'upload.scan.completed',
+                $uploadId,
+                'api',
+                [
+                    'result' => 'clean',
+                ]
+            );
 
             /* -------------------------------
              * Commit FINAL
@@ -128,6 +189,7 @@ class UploadFinalizeController extends Controller
             $finalPath = "{$finalDir}/{$filename}";
             File::copy($tempAssembledPath, $finalPath);
 
+            // cleanup intentionally deferred
             // File::deleteDirectory($chunksDir);
             // File::deleteDirectory($tempDir);
 
@@ -150,6 +212,10 @@ class UploadFinalizeController extends Controller
             ]);
         } catch (\Throwable $e) {
             $reason = $this->mapFailureReason($e);
+            Log::error('FINALIZE_EXCEPTION_DEBUG', [
+                'message' => $e->getMessage(),
+                'class'   => get_class($e),
+            ]);
 
             UploadEventEmitter::emit(
                 'upload.failed',
@@ -170,12 +236,22 @@ class UploadFinalizeController extends Controller
 
     private function mapFailureReason(\Throwable $e): string
     {
+        $message = strtolower($e->getMessage());
+
+        if (
+            str_contains($message, 'curl error') ||
+            str_contains($message, 'could not resolve host') ||
+            str_contains($message, 'connection refused') ||
+            str_contains($message, 'timeout')
+        ) {
+            return 'scanner_unavailable';
+        }
+
         return match ($e->getMessage()) {
-            'scanner_unavailable'      => 'scanner_unavailable',
-            'infected_file'            => 'infected_file',
-            'integrity_mismatch'       => 'integrity_mismatch',
-            'orphan_upload'            => 'orphan_upload',
-            default                    => 'internal_error',
+            'infected_file'       => 'infected_file',
+            'integrity_mismatch'  => 'integrity_mismatch',
+            'orphan_upload'       => 'orphan_upload',
+            default               => 'internal_error',
         };
     }
 }
