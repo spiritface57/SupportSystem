@@ -41,10 +41,21 @@ META=$(./scripts/prepare_upload_no_finalize.sh files/a.png)
 ./scripts/test_double_finalize_same_upload.sh "$META"
 
 Expected:
-• exactly one finalize attempt may succeed, the other must fail deterministically  
-• failing finalize must return a safe error and must not corrupt the promoted file  
-• if a filesystem lock is implemented in v0.4 then the second finalize should fail with a clear reason such as finalize_locked or finalize_in_progress  
-• upload events must show one finalize winner and one failed attempt
+• exactly one finalize attempt succeeds  
+• the second finalize attempt fails deterministically  
+• failure reason is finalize_locked  
+• upload events show one upload.finalized and one upload.failed
+
+
+## Event log completeness
+
+After any test run:
+
+Expected:
+• every upload_id has at least one upload.initiated event  
+• every finalize attempt results in either upload.finalized or upload.failed  
+• no upload_id has both upload.finalized and upload.failed for the same attempt
+
 
 ## Notes
 
