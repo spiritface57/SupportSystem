@@ -36,8 +36,8 @@ class UploadFinalizeController extends Controller
             }
 
             // BLOCKING lock: correctness > throughput for v0.4
-            if (!flock($lockHandle, LOCK_EX)) {
-                throw new \RuntimeException('finalize_lock_failed');
+            if (!flock($lockHandle, LOCK_EX | LOCK_NB)) {
+                throw new \RuntimeException('finalize_in_progress');
             }
 
             /* -------------------------------
@@ -268,6 +268,7 @@ class UploadFinalizeController extends Controller
             'orphan_upload'            => 'orphan_upload',
             'finalize_lock_failed'     => 'finalize_fs_race',
             'final_write_failed'       => 'finalize_fs_race',
+            'finalize_in_progress'     => 'finalize_in_progress',
             default                    => 'internal_error',
         };
     }
