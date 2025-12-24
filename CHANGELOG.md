@@ -1,204 +1,185 @@
-Post 08 -- File Upload & Chunking
---------------------------------
+# CHANGELOG.md
+Post 08 File Upload and Chunking
+================================
+
+## v0.1 Baseline Upload Flow no security claims
+
+Scope
+• Laravel API bootstrapped as the upload entry point  
+• upload session initialization endpoint  
+• chunked file upload supported  
+• chunks accepted and written to temporary storage  
+• flow functional but intentionally incomplete
+
+Explicit non goals
+• no malware scanning  
+• no streaming scan  
+• no finalize guarantees  
+• no integrity verification beyond basic byte count acceptance  
+• no auth  
+• no encryption claims  
+• no retry guarantees  
+• no production hardening
+
+Notes
+• this version validates request lifecycle only  
+• behavior is intentionally unsafe  
+• any reliability or security properties are explicitly out of scope
+
+
+## v0.2 Finalize and integrity still no scanning
+
+Scope
+• finalize endpoint added to complete an upload session  
+• chunks assembled into a single file in order  
+• total file size verified against total_bytes declared at init  
+• basic collision handling for duplicate upload_id or existing output file  
+• finalize returns completed or failed  
+• temporary chunk files cleaned up after finalize
+
+Explicit non goals
+• no malware scanning  
+• no streaming scan  
+• no content validation  
+• no auth  
+• no retry or resume guarantees  
+• no checksum or cryptographic integrity  
+• no concurrency safety across multiple finalize attempts  
+• no production hardening
+
+Failure behavior
+• missing chunks cause finalize failure  
+• size mismatch causes finalize failure  
+• partial files may remain on disk after failure  
+• failure does not roll back state
+
+Notes
+• focus is correctness of file assembly not safety  
+• integrity is byte count only  
+• security properties remain out of scope
+
+
+## v0.3 Streaming scan Node scanner with ClamAV plus backpressure and timeouts
+
+Scope
+• Node scanner service introduced as a separate process boundary  
+• finalize triggers a streaming scan via scanner service  
+• scanner uses ClamAV INSTREAM protocol  
+• API does not scan files locally  
+• no shared disk between services  
+• scan results are semantic outcomes:
+  • clean  
+  • infected  
+  • error
+• timeouts enforced to prevent hanging finalize  
+• backpressure enforced via scanner concurrency limits:
+  • when capacity exceeded new scan requests are rejected immediately
+
+Explicit non goals
+• no advanced threat detection beyond ClamAV signature scanning  
+• no file type validation or magic byte inspection  
+• no cryptographic integrity checks  
+• no exactly once guarantee for scan  
+• no strict idempotency for duplicate finalize  
+• no distributed transactions or rollback  
+• no persistent scan state machine  
+• no production observability stack
+
+Failure behavior
+• scanner unavailable:
+  • finalize fails with reason scanner_unavailable  
+  • file is not promoted to final trusted state
+• scan timeout:
+  • finalize fails with reason scan_timeout  
+  • file is not promoted
+• backpressure triggered:
+  • scanner rejects with reason scanner_busy  
+  • finalize fails fast
+• unexpected scanner response:
+  • finalize fails with explicit reason  
+  • file remains untrusted
+• temporary files may exist locally, but promotion only occurs after clean scan
 
-### v0.1 -- Baseline Upload Flow (No Security Claims)
+Notes
+• primary goal is failure containment  
+• clean and infected are domain outcomes not transport errors  
+• concurrency protection is out of scope in v0.3  
+• controlled rejection is preferred over unsafe acceptance
 
-**Scope**
 
--   Laravel API bootstrapped as the upload entry point.
+## v0.4 Observability and finalize race safety
 
--   Upload session initialization endpoint.
+Scope
+• persistent upload event log table upload_events for observability  
+• events emitted using event_name field
 
--   Chunked file upload supported.
+Event names
+• upload.initiated  
+• upload.finalized  
+• upload.failed  
 
--   Chunks are accepted and written to temporary storage.
+Scan lifecycle events
+• upload.scan.started  
+• upload.scan.completed  
+• upload.scan.failed  
 
--   Upload flow is functional but incomplete.
+• failure reasons stored separately in reason field when applicable
 
-**Explicit Non-Goals**
+• classify scanner network failures as scanner_unavailable:
+  • DNS failure  
+  • connection refused  
+  • connect timeout  
+  • read timeout
 
--   ❌ No virus or malware scanning.
+• finalize filesystem lock to prevent concurrent finalize races  
+• reproducible scripts for batch uploads and failure simulations  
+• SQL metric queries derived from upload_events table
 
--   ❌ No streaming scan.
+Allowed failure reasons
+• scanner_unavailable
+• scanner_busy
+• scan_timeout
+• scan_protocol_error
 
--   ❌ No finalize guarantees.
+• finalize_locked
+• finalize_missing_chunks
+• finalize_size_mismatch
+• finalize_internal_error
 
--   ❌ No integrity verification beyond basic size checks.
+Metric query examples
 
--   ❌ No authentication or authorization.
+Total uploads initiated per day:
 
--   ❌ No encryption or security claims.
+SELECT
+  DATE(created_at) AS day,
+  COUNT(*) AS count
+FROM upload_events
+WHERE event_name = 'upload.initiated'
+GROUP BY DATE(created_at)
+ORDER BY day DESC;
 
--   ❌ No retry guarantees.
 
--   ❌ No production hardening.
+Finalize success rate:
 
-**Notes**
+SELECT
+  SUM(CASE WHEN event_name = 'upload.finalized' THEN 1 ELSE 0 END) AS success,
+  SUM(CASE WHEN event_name = 'upload.failed' THEN 1 ELSE 0 END) AS failed
+FROM upload_events;
 
--   This version exists to validate the upload flow and request lifecycle only.
 
--   Behavior is intentionally unsafe and incomplete.
+Scanner failure reasons distribution:
 
--   Any reliability or security properties are out of scope for this version.
-  
+SELECT
+  reason,
+  COUNT(*) AS count
+FROM upload_events
+WHERE event_name = 'upload.scan.failed'
+GROUP BY reason
+ORDER BY count DESC;
 
-## v0.2 -- Finalize & Integrity (Still No Scanning)
 
-**Scope**
 
--   Finalize endpoint added to complete an upload session.
-
--   Chunks are assembled into a single file in order.
-
--   Total file size is verified against `total_bytes` declared at init.
-
--   Basic collision handling for duplicate `upload_id` or existing output file.
-
--   Upload session finalize result is returned as completed or failed.
-
--   Temporary chunk files are cleaned up after finalize.
-
-**Explicit Non-Goals**
-
--   ❌ No virus or malware scanning.
-
--   ❌ No streaming scan.
-
--   ❌ No content validation.
-
--   ❌ No authentication or authorization.
-
--   ❌ No retry or resume guarantees.
-
--   ❌ No checksum or cryptographic integrity validation.
-
--   ❌ No concurrency safety across multiple finalize attempts.
-
--   ❌ No production hardening.
-
-**Failure Behavior**
-
--   Missing chunks result in finalize failure.
-
--   Size mismatch results in finalize failure.
-
--   Partial files may exist on disk after failure.
-
--   Failure does not automatically roll back state.
-
-**Notes**
-
--   This version focuses on correctness of file assembly, not safety.
-
--   File integrity is limited to byte-count verification only.
-
--   Security properties are explicitly out of scope.
-
-
-
-## v0.3 -- Streaming Scan (Node.js + ClamAV) + Backpressure + Timeouts
-
-**Scope**
-
--   A dedicated **Node.js scanner service** is introduced as a separate process boundary from the Laravel API.
-
--   The upload **finalize** flow triggers a **streaming virus scan** via the scanner service.
-
--   The scanner uses **ClamAV INSTREAM protocol** to scan incoming bytes as a stream.
-
--   The API **does not scan files locally** and does not rely on a shared filesystem for scanning.
-
--   **No shared disk exists between services**:
-
-    -   The API may assemble chunks into a local temporary file.
-
-    -   The scanner never mounts or reads API filesystem paths.
-
-    -   All scan data is transferred over a socket stream.
-
--   Scan results are returned as **semantic outcomes**, not transport errors:
-
-    -   `clean` -- scan completed successfully, file is safe
-
-    -   `infected` -- scan completed successfully, malware detected
-
-    -   `error` -- scan did not complete successfully
-
--   **Timeouts** are enforced on scan requests to prevent hanging finalize operations.
-
--   **Backpressure** is enforced via scanner concurrency limits:
-
-    -   When scanner capacity is exceeded, new scan requests are rejected immediately.
-
-    -   This prevents latency collapse and resource exhaustion.
-
-* * * * *
-
-**Explicit Non-Goals**
-
--   ❌ No advanced threat detection beyond ClamAV signature scanning.
-
--   ❌ No file-type validation, magic byte inspection, or content parsing.
-
--   ❌ No cryptographic integrity checks (checksums, hashes).
-
--   ❌ No exactly-once guarantees for scan requests.
-
--   ❌ No strict idempotency or full concurrency safety for duplicate finalize calls.
-
--   ❌ No distributed transactions or rollback guarantees.
-
--   ❌ No persistent scan state machine.
-
--   ❌ No production-grade observability (metrics dashboards, tracing, alerting).
-
-* * * * *
-
-**Failure Behavior**
-
--   **Scanner unavailable**
-
-    -   Finalize returns a failure response with reason `scanner_unavailable`.
-
-    -   The file is **not promoted** to a final state.
-
--   **Scan timeout**
-
-    -   Finalize returns a failure response with reason `scan_timeout`.
-
-    -   The file is **not promoted**.
-
--   **Backpressure triggered**
-
-    -   Scanner rejects the request with reason `scanner_busy`.
-
-    -   Finalize fails fast instead of blocking or queueing.
-
--   **Unexpected scanner response**
-
-    -   Finalize returns failure with an explicit error reason.
-
-    -   The file remains untrusted.
-
--   Temporary files **may exist locally** on the API during or after failure,\
-    but **promotion to a final state only occurs after a clean scan result**.
-
-* * * * *
-
-**Notes**
-
--   The primary goal of this version is **failure containment**:
-
-    -   Scanner failures must not crash, block, or destabilize the API process.
-
--   Scan outcomes (`clean`, `infected`) are **domain results**, not errors.\
-    Transport-level failures are handled separately.
-
--   File locking and concurrent write protection are **intentionally out of scope**:
-
-    -   Finalize assumes all chunks have been fully written before scanning begins.
-
-    -   Concurrent writes during finalize are considered undefined behavior.
-
--   This version prioritizes **controlled degradation over throughput**.\
-    Rejecting work safely is preferred to accepting work unsafely.
+Notes
+• v0.4 turns the upload flow into an auditable system  
+• lock behavior must be deterministic under double finalize  
+• metrics are derived only from persisted events
