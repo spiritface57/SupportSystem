@@ -1,51 +1,79 @@
-# Post 8 v0.3 -- Scan Contract (Laravel ↔ Node Scanner)
+# scan-contract.md
+# Post 8 v0.3 Scan Contract between Laravel API and Node Scanner
+
+## Goal
+
+Provide a stable scan contract where:
+• API sends file bytes to scanner as a stream  
+• scanner returns a semantic result  
+• transport failures and overload are surfaced explicitly  
+• scanner does not access API filesystem paths
 
 ## Endpoint
 
 POST /scan
 
-## Request (JSON)
+Content Type: application/octet-stream
 
-{
+Query params:
+• upload_id: string  
+• filename: string  
+• total_bytes: integer
 
-  "upload_id": "string",
+Example:
+POST /scan?upload_id=<id>&filename=<name>&total_bytes=123
 
-  "filename": "string",
+## Request Body
 
-  "total_bytes": 123,
+Raw bytes stream of the file.
 
-  "source": {
+Rules:
+• API must stream the exact file bytes in order  
+• total bytes sent should match total_bytes  
+• scanner must not require any shared disk access  
+• scanner must not require any local_path or file reference
+• No filesystem path is shared
 
-    "type": "local_path",
-
-    "path": "/var/data/uploads_tmp/<upload_id>/<file>"
-
-  }
-
-}
 
 ## Response (JSON)
 
 ### clean
 
+HTTP 200
 { "status": "clean" }
 
 ### infected
 
+HTTP 200
 { "status": "infected", "signature": "string" }
 
 ### error
 
-{ "status": "error", "reason": "timeout|unavailable|internal" }
+HTTP 5xx or 4xx depending on class
+{ "status": "error", "reason": "timeout|unavailable|busy|bad_request|internal" }
+
+Reason meaning:
+• timeout: scan did not complete within enforced timeout  
+• unavailable: scanner could not reach clamd or required dependencies  
+• busy: scanner is overloaded and rejected the request immediately  
+• bad_request: missing params or invalid total_bytes or invalid body  
+• internal: unexpected scanner failure after request accepted
 
 ## Timeouts
 
-- API enforces a hard timeout on scan request.
-
-- Scanner also enforces its own timeout for clamd operations.
+• API enforces a hard timeout for the scan request  
+• scanner enforces its own timeout for clamd operations  
+• timeout must result in status error with reason timeout
 
 ## Backpressure
 
-- Scanner returns HTTP 429 when overloaded.
+• scanner enforces a concurrency limit  
+• when capacity is exceeded scanner returns status error with reason busy  
+• v0.3 behavior: API fails finalize immediately on busy  
+• future behavior may retry or queue, but that is out of scope for v0.3
 
-- API treats 429 as a retryable failure (future version), but v0.3 returns error.
+## Notes
+
+• clean and infected are domain outcomes and must not be represented as transport errors  
+• only error represents an incomplete scan outcome  
+• this contract intentionally stays small and stable
