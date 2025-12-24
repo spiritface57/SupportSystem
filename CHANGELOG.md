@@ -123,7 +123,10 @@ Scan lifecycle events
 • upload.scan.completed  
 • upload.scan.failed  
 
-• failure reasons stored separately in reason field when applicable
+Failure reasons
+• failure reasons are restricted to the values defined in docs/failure-reasons.md
+• free-form reason values are not allowed
+
 
 • classify scanner network failures as scanner_unavailable:
   • DNS failure  
@@ -135,16 +138,10 @@ Scan lifecycle events
 • reproducible scripts for batch uploads and failure simulations  
 • SQL metric queries derived from upload_events table
 
-Allowed failure reasons
-• scanner_unavailable
-• scanner_busy
-• scan_timeout
-• scan_protocol_error
-
-• finalize_locked
-• finalize_missing_chunks
-• finalize_size_mismatch
-• finalize_internal_error
+Explicit non goals
+• no global upload state machine
+• no retry or queueing of failed scans
+• no aggregation tables or precomputed metrics
 
 Metric query examples
 
@@ -159,7 +156,8 @@ GROUP BY DATE(created_at)
 ORDER BY day DESC;
 
 
-Finalize success rate:
+Finalize success counts:
+Counts are derived from persisted events and not pre-aggregated.
 
 SELECT
   SUM(CASE WHEN event_name = 'upload.finalized' THEN 1 ELSE 0 END) AS success,
@@ -183,3 +181,4 @@ Notes
 • v0.4 turns the upload flow into an auditable system  
 • lock behavior must be deterministic under double finalize  
 • metrics are derived only from persisted events
+• for a given upload_id, exactly one finalize outcome must exist per finalize attempt
