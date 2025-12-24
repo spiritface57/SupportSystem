@@ -1,43 +1,72 @@
-# Scripts – Operational and Testing Utilities
+## chaos/
 
-This directory contains operational, testing, and experimentation scripts
-used to validate system behavior under non-ideal conditions.
+This directory contains scripts used to intentionally introduce failures.
 
-Scripts in this directory are **not production code**.
-They exist to support development, testing, and architectural validation.
+### Typical use cases
+- Killing or restarting services
+- Injecting latency or timeouts
+- Simulating partial unavailability
 
----
+### Used to validate
+- Failure isolation boundaries
+- Deterministic cleanup behavior
+- Resilience assumptions
 
-## Scope
-
-Scripts in this directory may:
-
-- Simulate failure scenarios
-- Apply load and stress to services
-- Support local development and inspection
-- Assist with operational validation
-
-They must **never**:
-- Be required for normal system operation
-- Contain business logic
-- Define system guarantees
-
-All guarantees are enforced by services, not scripts.
+These scripts are **never** used in production environments.
 
 ---
 
-## Directory Overview
+## load-tests/
 
-```text
-scripts/
-├── chaos/
-│   └── Failure and disruption experiments
-│
-├── load-tests/
-│   └── Load, stress, and concurrency testing tools
-│
-├── local-tools/
-│   └── Local development and inspection utilities
-│
-└── services/
-    └── Service-specific helper scripts
+This directory contains scripts for applying controlled load to the system.
+
+### Typical use cases
+- Upload concurrency testing
+- Large file stress scenarios
+- Resource saturation experiments
+
+### Used to validate
+- Memory assumptions
+- Latency behavior
+- System breaking points
+
+Results are observational, not contractual.
+
+---
+
+## local-tools/
+
+This directory contains local development utilities.
+
+### Examples
+- Environment setup helpers
+- Inspection and cleanup tools
+- One-off debugging scripts
+
+These tools are intentionally ad-hoc and environment-specific.
+
+---
+
+## services/
+
+This directory contains helper scripts scoped to specific services.
+
+### Examples
+- Service startup helpers
+- Health check scripts
+- Service-specific diagnostics
+
+These scripts must not leak assumptions across service boundaries.
+
+---
+
+## Usage Guidelines
+
+- Scripts may be destructive
+- Scripts may assume a local or controlled environment
+- Scripts should be executed intentionally and explicitly
+
+### Do **not**
+- Run scripts blindly
+- Depend on scripts for correctness
+- Commit generated artifacts
