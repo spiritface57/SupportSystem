@@ -1,5 +1,5 @@
 # scan-contract.md
-# Post 8 v0.3 Scan Contract between Laravel API and Node Scanner
+# Post 8 v0.4 Scan Contract between Laravel API and Node Scanner
 
 ## Goal
 
@@ -32,7 +32,6 @@ Rules:
 • total bytes sent should match total_bytes  
 • scanner must not require any shared disk access  
 • scanner must not require any local_path or file reference
-• No filesystem path is shared
 
 
 ## Response (JSON)
@@ -50,7 +49,7 @@ HTTP 200
 ### error
 
 HTTP 5xx or 4xx depending on class
-{ "status": "error", "reason": "timeout|unavailable|busy|bad_request|internal" }
+{ "status": "error", "reason": "scan_timeout|scanner_unavailable|scanner_busy|bad_request|scan_internal_error" }
 
 Reason meaning:
 • timeout: scan did not complete within enforced timeout  
