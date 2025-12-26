@@ -20,13 +20,14 @@ class UploadFinalizeController extends Controller
         ]);
 
         $uploadId   = $data['upload_id'];
-        $filename   = $data['filename'];
+        $filename   = $this->sanitizeFilename($data['filename']);
         $totalBytes = (int) $data['total_bytes'];
         $startedAt  = microtime(true);
 
-        // ✅ v0.4: global finalize lock (filesystem critical section)
         $lockHandle = null;
+
         try {
+            /* Global finalize lock */
             $lockFile = storage_path('app/tmp/finalize.lock');
             File::ensureDirectoryExists(dirname($lockFile));
 
@@ -35,22 +36,17 @@ class UploadFinalizeController extends Controller
                 throw new \RuntimeException('finalize_lock_failed');
             }
 
-            // BLOCKING lock: correctness > throughput for v0.4
             if (!flock($lockHandle, LOCK_EX | LOCK_NB)) {
                 throw new \RuntimeException('finalize_in_progress');
             }
 
-            /* -------------------------------
-             * Locate chunks
-             * ------------------------------- */
+            /* Locate chunks */
             $chunksDir = storage_path("app/uploads/{$uploadId}");
             if (!is_dir($chunksDir)) {
                 throw new \RuntimeException('orphan_upload');
             }
 
-            /* -------------------------------
-             * Assemble into TEMP
-             * ------------------------------- */
+            /* Assemble into TEMP */
             $tempDir = storage_path("app/tmp/{$uploadId}");
             File::ensureDirectoryExists($tempDir);
 
@@ -66,9 +62,7 @@ class UploadFinalizeController extends Controller
                 ->sortBy(fn($f) => (int) pathinfo($f->getFilename(), PATHINFO_FILENAME));
 
             foreach ($chunks as $chunk) {
-                $path = $chunk->getPathname();
-
-                $in = @fopen($path, 'rb');
+                $in = fopen($chunk->getPathname(), 'rb');
                 if ($in === false) {
                     throw new \RuntimeException('chunk_open_failed');
                 }
@@ -76,11 +70,13 @@ class UploadFinalizeController extends Controller
                 while (!feof($in)) {
                     $buf = fread($in, 8192);
                     if ($buf === false) {
+                        fclose($in);
                         throw new \RuntimeException('chunk_read_failed');
                     }
 
                     $w = fwrite($out, $buf);
                     if ($w === false) {
+                        fclose($in);
                         throw new \RuntimeException('temp_write_failed');
                     }
 
@@ -96,112 +92,124 @@ class UploadFinalizeController extends Controller
                 throw new \RuntimeException('integrity_mismatch');
             }
 
-            /* -------------------------------
-             * Scan gate
-             * ------------------------------- */
-            UploadEventEmitter::emit(
+            /* Scan decoupled */
+            $scanStatus = 'pending_scan';
+
+            $this->safeEmit(
                 'upload.scan.started',
                 $uploadId,
                 'api',
                 ['engine' => 'clamav']
             );
 
-            $hash   = hash_file('sha256', $tempAssembledPath);
-            $stream = fopen($tempAssembledPath, 'rb');
-            if ($stream === false) {
-                UploadEventEmitter::emit('upload.scan.failed', $uploadId, 'api', ['reason' => 'internal_error']);
-                throw new \RuntimeException('temp_open_failed');
-            }
-
             try {
-                $scannerResponse = Http::timeout(config('scanner.timeout'))
-                    ->withHeaders(['Content-Type' => 'application/octet-stream'])
-                    ->send('POST', config('scanner.base_url') . '/scan', [
-                        'body' => $stream,
-                    ]);
+                $hash = hash_file('sha256', $tempAssembledPath);
+
+                $stream = fopen($tempAssembledPath, 'rb');
+                if ($stream === false) {
+                    throw new \RuntimeException('temp_open_failed');
+                }
+
+                try {
+                    $scannerResponse = Http::timeout(config('scanner.timeout'))
+                        ->withHeaders(['Content-Type' => 'application/octet-stream'])
+                        ->send('POST', rtrim(config('scanner.base_url'), '/') . '/scan', [
+                            'body' => $stream,
+                        ]);
+                } finally {
+                    fclose($stream);
+                }
+
+                if ($scannerResponse->ok()) {
+                    $body = $scannerResponse->json();
+
+                    if (is_array($body) && ($body['status'] ?? null) === 'infected') {
+                        Log::channel('infected')->warning('infected_upload', [
+                            'upload_id' => $uploadId,
+                            'filename'  => $filename,
+                            'bytes'     => $written,
+                            'sha256'    => $hash,
+                            'signature' => $body['signature'] ?? null,
+                            'ip'        => $request->ip(),
+                        ]);
+
+                        $this->safeEmit(
+                            'upload.scan.failed',
+                            $uploadId,
+                            'api',
+                            ['reason' => 'infected_file']
+                        );
+
+                        throw new \RuntimeException('infected_file');
+                    }
+
+                    if (($body['status'] ?? null) === 'clean') {
+                        $scanStatus = 'clean';
+
+                        $this->safeEmit(
+                            'upload.scan.completed',
+                            $uploadId,
+                            'api',
+                            ['result' => 'clean']
+                        );
+                    }
+                }
             } catch (\Throwable $e) {
-                fclose($stream);
-                UploadEventEmitter::emit('upload.scan.failed', $uploadId, 'api', ['reason' => 'scanner_unavailable']);
-                throw $e;
-            }
-
-            fclose($stream);
-
-            if ($scannerResponse->failed()) {
-                UploadEventEmitter::emit('upload.scan.failed', $uploadId, 'api', ['reason' => 'scanner_unavailable']);
-                throw new \RuntimeException('scanner_unavailable');
-            }
-
-            $body = $scannerResponse->json();
-
-            if (!is_array($body) || !array_key_exists('status', $body)) {
-                UploadEventEmitter::emit('upload.scan.failed', $uploadId, 'api', ['reason' => 'scanner_invalid_response']);
-                throw new \RuntimeException('scanner_invalid_response');
-            }
-
-            if ($body['status'] === 'infected') {
-                Log::channel('infected')->warning('infected_upload', [
+                Log::warning('scanner_degraded', [
                     'upload_id' => $uploadId,
-                    'filename'  => $filename,
-                    'bytes'     => $written,
-                    'sha256'    => $hash,
-                    'signature' => $body['signature'] ?? null,
-                    'ip'        => $request->ip(),
+                    'error'     => $e->getMessage(),
                 ]);
 
-                UploadEventEmitter::emit('upload.scan.failed', $uploadId, 'api', ['reason' => 'infected_file']);
-                throw new \RuntimeException('infected_file');
+                $this->safeEmit(
+                    'upload.scan.failed',
+                    $uploadId,
+                    'api',
+                    ['reason' => 'scanner_unavailable']
+                );
+
+                $scanStatus = 'pending_scan';
             }
 
-            if ($body['status'] !== 'clean') {
-                UploadEventEmitter::emit('upload.scan.failed', $uploadId, 'api', ['reason' => 'scanner_unknown_state']);
-                throw new \RuntimeException('scanner_unknown_state');
-            }
-
-            UploadEventEmitter::emit(
-                'upload.scan.completed',
-                $uploadId,
-                'api',
-                ['result' => 'clean']
-            );
-
-            /* -------------------------------
-             * Commit FINAL
-             * ------------------------------- */
+            /* Commit FINAL independent */
             $finalDir = storage_path("app/final/uploads/{$uploadId}");
             File::ensureDirectoryExists($finalDir);
 
             $finalPath = "{$finalDir}/{$filename}";
 
-            // Use move if you want atomic-ish, copy if you want keep temp
-            // For v0.4 correctness, copy is OK but may be slower.
             if (!File::copy($tempAssembledPath, $finalPath)) {
                 throw new \RuntimeException('final_write_failed');
             }
 
-            // Optional cleanup (enable when ready)
-            // File::deleteDirectory($chunksDir);
-            // File::deleteDirectory($tempDir);
+            /* Cleanup temp */
+            try {
+                File::deleteDirectory($tempDir);
+            } catch (\Throwable $e) {
+                Log::warning('finalize_cleanup_failed', [
+                    'upload_id' => $uploadId,
+                    'error'     => $e->getMessage(),
+                ]);
+            }
 
             $durationMs = (int) ((microtime(true) - $startedAt) * 1000);
 
-            UploadEventEmitter::emit(
+            $this->safeEmit(
                 'upload.finalized',
                 $uploadId,
                 'api',
                 [
-                    'duration_ms' => $durationMs,
                     'bytes'       => $written,
+                    'duration_ms' => $durationMs,
+                    'status'      => $scanStatus,
                 ]
             );
 
             return response()->json([
                 'finalized' => true,
                 'bytes'     => $written,
+                'status'    => $scanStatus,
                 'path'      => $finalPath,
             ]);
         } catch (\Throwable $e) {
-            // DEBUG log (keep until stable)
             Log::error('FINALIZE_EXCEPTION', [
                 'upload_id' => $uploadId ?? null,
                 'class'     => get_class($e),
@@ -210,9 +218,9 @@ class UploadFinalizeController extends Controller
 
             $reason = $this->mapFailureReason($e);
 
-            UploadEventEmitter::emit(
+            $this->safeEmit(
                 'upload.failed',
-                $uploadId,
+                $uploadId ?? 'unknown',
                 'api',
                 [
                     'stage'  => 'finalize',
@@ -225,7 +233,6 @@ class UploadFinalizeController extends Controller
                 'reason' => $reason,
             ], Response::HTTP_BAD_REQUEST);
         } finally {
-            // ✅ always release lock
             if (is_resource($lockHandle)) {
                 flock($lockHandle, LOCK_UN);
                 fclose($lockHandle);
@@ -233,11 +240,42 @@ class UploadFinalizeController extends Controller
         }
     }
 
+    private function safeEmit(string $event, string $uploadId, string $source, array $payload = []): void
+    {
+        try {
+            UploadEventEmitter::emit($event, $uploadId, $source, $payload);
+        } catch (\Throwable $e) {
+            Log::warning('event_emit_failed', [
+                'event'     => $event,
+                'upload_id' => $uploadId,
+                'error'     => $e->getMessage(),
+            ]);
+        }
+    }
+
+    private function sanitizeFilename(string $filename): string
+    {
+        $clean = basename($filename);
+
+        if ($clean === '' || $clean === '.' || $clean === '..') {
+            throw new \RuntimeException('invalid_filename');
+        }
+
+        if (str_contains($clean, "\0") || str_contains($clean, '/') || str_contains($clean, '\\')) {
+            throw new \RuntimeException('invalid_filename');
+        }
+
+        return $clean;
+    }
+
     private function mapFailureReason(\Throwable $e): string
     {
         $msg = strtolower((string) $e->getMessage());
 
-        // Network-ish / DNS / timeout errors thrown by HTTP client
+        if ($e instanceof \InvalidArgumentException) {
+            return 'invalid_event';
+        }
+
         if (
             str_contains($msg, 'curl error') ||
             str_contains($msg, 'could not resolve host') ||
@@ -248,28 +286,25 @@ class UploadFinalizeController extends Controller
             return 'scanner_unavailable';
         }
 
-        // Filesystem race / IO hints
         if (
-            str_contains($msg, 'fopen(') ||
-            str_contains($msg, 'copy(') ||
-            str_contains($msg, 'mkdir(') ||
+            str_contains($msg, 'permission denied') ||
             str_contains($msg, 'no such file') ||
-            str_contains($msg, 'permission denied')
+            str_contains($msg, 'mkdir(') ||
+            str_contains($msg, 'copy(') ||
+            str_contains($msg, 'fopen(')
         ) {
             return 'finalize_fs_race';
         }
 
         return match ($e->getMessage()) {
-            'scanner_unavailable'      => 'scanner_unavailable',
-            'scanner_invalid_response' => 'scanner_unavailable',
-            'scanner_unknown_state'    => 'scanner_unavailable',
-            'infected_file'            => 'infected_file',
-            'integrity_mismatch'       => 'integrity_mismatch',
-            'orphan_upload'            => 'orphan_upload',
-            'finalize_lock_failed'     => 'finalize_fs_race',
-            'final_write_failed'       => 'finalize_fs_race',
-            'finalize_in_progress'     => 'finalize_in_progress',
-            default                    => 'internal_error',
+            'infected_file'        => 'infected_file',
+            'integrity_mismatch'   => 'integrity_mismatch',
+            'orphan_upload'        => 'orphan_upload',
+            'finalize_lock_failed' => 'finalize_fs_race',
+            'final_write_failed'   => 'finalize_fs_race',
+            'finalize_in_progress' => 'finalize_in_progress',
+            'invalid_filename'     => 'invalid_filename',
+            default                => 'internal_error',
         };
     }
 }
