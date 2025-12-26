@@ -1,78 +1,61 @@
-# scan-contract.md
-# Post 8 v0.4 Scan Contract between Laravel API and Node Scanner
+# Scan Contract (Post 8 v0.4)
 
-## Goal
+This document defines the contract between the upload pipeline
+and the malware scanning subsystem.
 
-Provide a stable scan contract where:
-• API sends file bytes to scanner as a stream  
-• scanner returns a semantic result  
-• transport failures and overload are surfaced explicitly  
-• scanner does not access API filesystem paths
+The contract is behavioral, not implementation-specific.
 
-## Endpoint
+---
 
-POST /scan
+## Inputs
 
-Content Type: application/octet-stream
+- Binary file stream
+- Upload identifier
+- Immutable metadata
 
-Query params:
-• upload_id: string  
-• filename: string  
-• total_bytes: integer
+---
 
-Example:
-POST /scan?upload_id=<id>&filename=<name>&total_bytes=123
+## Outputs
 
-## Request Body
+The scanner may return one of the following results:
 
-Raw bytes stream of the file.
+- clean
+- infected
+- unavailable
 
-Rules:
-• API must stream the exact file bytes in order  
-• total bytes sent should match total_bytes  
-• scanner must not require any shared disk access  
-• scanner must not require any local_path or file reference
+The scanner must not:
+- Block upload finalization
+- Mutate upload state directly
+- Retry internally without bounds
 
+---
 
-## Response (JSON)
+## Versioned Behavior
 
-### clean
+v0.3 behavior:
+- Scanner failure caused upload finalization to fail
 
-HTTP 200
-{ "status": "clean" }
+v0.4 behavior:
+- Upload is finalized regardless of scanner availability
+- Scanner failure results in a degraded scan state
 
-### infected
+---
 
-HTTP 200
-{ "status": "infected", "signature": "string" }
+## Degraded Behavior
 
-### error
+When the scanner is unavailable:
 
-HTTP 5xx or 4xx depending on class
-{ "status": "error", "reason": "scan_timeout|scanner_unavailable|scanner_busy|bad_request|scan_internal_error" }
+- Upload finalization proceeds
+- Scan result is recorded as pending
+- State transitions to PENDING_SCAN
 
-Reason meaning:
-• timeout: scan did not complete within enforced timeout  
-• unavailable: scanner could not reach clamd or required dependencies  
-• busy: scanner is overloaded and rejected the request immediately  
-• bad_request: missing params or invalid total_bytes or invalid body  
-• internal: unexpected scanner failure after request accepted
+This behavior is mandatory in v0.4.
 
-## Timeouts
+---
 
-• API enforces a hard timeout for the scan request  
-• scanner enforces its own timeout for clamd operations  
-• timeout must result in status error with reason timeout
+## Invariants
 
-## Backpressure
-
-• scanner enforces a concurrency limit  
-• when capacity is exceeded scanner returns status error with reason busy  
-• v0.3 behavior: API fails finalize immediately on busy  
-• future behavior may retry or queue, but that is out of scope for v0.3
-
-## Notes
-
-• clean and infected are domain outcomes and must not be represented as transport errors  
-• only error represents an incomplete scan outcome  
-• this contract intentionally stays small and stable
+- Scanner availability must not affect ingestion
+- Scanner failure must be explicit
+- Scanner failure must be observable
+- Scanner failure must not cascade

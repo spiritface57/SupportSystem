@@ -1,23 +1,46 @@
 # Post 8 v0.4 Failure Reasons
 
 This document defines the only allowed machine-readable failure reasons
-emitted by the upload and scan pipeline.
+emitted by the upload pipeline.
 
-## Scanner failures
+Failure reasons are strict and enumerable.
+Free-form values are not allowed.
 
-• scanner_unavailable  
-• scanner_busy  
-• scan_timeout  
-• scan_protocol_error  
+---
 
-## Finalize failures
+## Scanner Failures
 
-• finalize_locked  
-• finalize_missing_chunks  
-• finalize_size_mismatch  
-• finalize_internal_error  
+scanner_unavailable
+scanner_busy
+scan_timeout
+scan_protocol_error
 
-## Rules:
-• failure reason must be one of the values listed above  
-• free-form error messages must not be used as reason  
-• human-readable context may be stored separately in metadata
+---
+
+## Finalize Failures
+
+finalize_in_progress
+finalize_locked
+finalize_missing_chunks
+finalize_size_mismatch
+finalize_internal_error
+
+---
+
+## Rules
+
+- Failure reason must be one of the values listed above
+- Failure reason must be machine-readable
+- Human-readable context must be stored separately
+
+---
+
+## Non-Failure States
+
+The following values are states, not failures:
+
+pending_scan
+clean
+infected
+
+States must not be emitted as failure reasons.

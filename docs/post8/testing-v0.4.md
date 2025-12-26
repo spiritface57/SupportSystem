@@ -1,63 +1,91 @@
-# testing-v0.4.md
 # v0.4 Testing
 
-This file documents reproducible test scenarios for Post 8 v0.4.
+This document defines reproducible test scenarios for Post 8 v0.4.
+
+If test expectations and implementation diverge,
+the implementation is wrong.
+
+---
+
+## Core Invariant
+
+Upload finalization must not depend on scanner availability.
+
+Scanner failures may degrade file availability.
+Scanner failures must not block ingestion or finalization.
+
+---
 
 ## Preconditions
 
-• docker compose is running for api and scanner  
-• test files exist under ./test-files  
-• scripts are executable
+Docker Compose is running for the API service.
+Scanner service may be running or stopped.
+Test files exist under ./test-files.
+Test scripts are executable.
 
-## Batch upload
+---
+
+## Batch Upload With Scanner Available
 
 Command:
-./scripts/upload_folder.sh ./test-files
+./scripts/services/api/file-upload-scan/upload_folder.sh ./test-files
 
-Expected:
-• upload.initiated event emitted  
-• upload.scan.started event emitted  
-• upload.scan.completed event emitted  
-• upload.finalized event emitted
+Expected behavior:
+upload.initiated event is emitted.
+upload.scan.started event is emitted.
+upload.scan.completed event is emitted.
+upload.finalized event is emitted.
+Finalize response status is clean.
 
-## Scanner down simulation
+---
+
+## Scanner Down Simulation
+
+This scenario validates the core v0.4 guarantee.
 
 Commands:
 docker stop scanner-service
-./scripts/upload_folder.sh ./test-files
+./scripts/services/api/file-upload-scan/upload_folder.sh ./test-files
 docker start scanner-service
 
-Expected:
-• upload.initiated event emitted  
-• upload.scan.failed event emitted with reason scanner_unavailable  
-• upload.failed event emitted  
-• no upload.finalized event emitted
+Expected behavior:
+upload.initiated event is emitted.
+upload.scan.failed event is emitted with reason scanner_unavailable.
+upload.finalized event is emitted.
+Finalize response status is pending_scan.
+No upload is rejected due to scanner unavailability.
 
+If upload.finalized is missing, this is a bug.
 
-## Double finalize for the same upload_id
+---
+
+## Double Finalize for the Same upload_id
 
 Commands:
 META=$(./scripts/prepare_upload_no_finalize.sh files/a.png)
 ./scripts/test_double_finalize_same_upload.sh "$META"
 
-Expected:
-• exactly one finalize attempt succeeds  
-• the second finalize attempt fails deterministically  
-• failure reason is finalize_locked  
-• upload events show one upload.finalized and one upload.failed
+Expected behavior:
+Exactly one finalize attempt succeeds.
+The second finalize attempt fails deterministically.
+Failure reason is finalize_in_progress.
+Upload events show one upload.finalized and one upload.failed.
 
+---
 
-## Event log completeness
+## Event Log Completeness
 
 After any test run:
 
-Expected:
-• every upload_id has at least one upload.initiated event  
-• every finalize attempt results in either upload.finalized or upload.failed  
-• no upload_id has both upload.finalized and upload.failed for the same attempt
+Every upload_id has at least one upload.initiated event.
+Every finalize attempt results in exactly one outcome.
+The outcome is either upload.finalized or upload.failed.
+No finalize attempt produces both.
 
+---
 
 ## Notes
 
-• if any test result is nondeterministic, treat it as a bug in concurrency control or locking  
-• a passing run must be reproducible across multiple runs
+Any nondeterministic result indicates a concurrency or locking bug.
+Scanner availability must not influence finalize determinism.
+A passing run must be reproducible across multiple executions.
