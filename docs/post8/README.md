@@ -1,143 +1,93 @@
-# Post 8 – File Upload, Chunking, and Streaming Scan
+# Post 8 – File Upload Finalization and Scan Decoupling (v0.4)
 
-This document describes **Post 8** of the architecture and implementation series.
+Post 8 documents the evolution of the file upload pipeline under
+real-world on-prem constraints.
 
-Post 8 focuses on building a production-grade, on-prem file upload pipeline
-under strict resource constraints, with explicit guarantees and failure isolation.
+The focus of v0.4 is a single guarantee:
 
----
+Upload finalization must not depend on scanner availability.
 
-## Scope of Post 8
-
-Post 8 covers the following concerns:
-
-- Chunked file upload lifecycle
-- Upload finalization and integrity guarantees
-- Streaming malware scanning
-- Isolation of scanning failures from ingestion
-- Explicit handling of partial and degraded states
-
-It intentionally avoids:
-- Queue-based processing
-- Distributed job orchestration
-- Advanced observability and metrics
-
-Those concerns are deferred to later posts.
+This post does not introduce new features.
+It introduces explicit behavior under failure.
 
 ---
 
-## Constraints Addressed
+## Scope
 
-Post 8 is implemented under the following constraints:
+This document describes system-level behavior only.
 
-- Fully on-prem deployment
-- No shared filesystem between services
-- Bounded memory usage for large files
-- Scanner instability must not cascade
-- API latency must remain predictable
+It defines:
+- Behavioral guarantees
+- Explicit failure modes
+- Intentional omissions
 
-All design decisions in this post are derived from these constraints.
-
----
-
-## Architecture Overview
-
-At a high level, Post 8 introduces a three-phase upload flow:
-
-1. **Initialization**
-   - Client declares upload intent
-   - Metadata and constraints are validated
-   - A unique upload identifier is issued
-
-2. **Chunk Ingestion**
-   - File data is uploaded in ordered chunks
-   - Each chunk is validated independently
-   - No full file buffering occurs in memory
-
-3. **Finalization and Scan**
-   - Chunk completeness and size integrity are verified
-   - A streaming malware scan is triggered
-   - A definitive outcome is returned
-
-Each phase is designed to fail explicitly and independently.
+It does not describe:
+- Internal service implementations
+- UI behavior
+- Optimization strategies
 
 ---
 
-## Streaming Scan Model
+## Core Change in v0.4
 
-Malware scanning is performed using a dedicated scanner service.
+Prior to v0.4, scanner availability implicitly gated upload finalization.
 
-Key properties:
-- Data is streamed incrementally
-- No full file is loaded into memory
-- Scan execution is time-bounded
-- Scanner failures are isolated
+In v0.4:
+- Uploads are finalized independently
+- Scan execution is best-effort
+- Scanner failure produces a degraded state, not a failed upload
 
-Possible scan outcomes:
-- clean
-- infected
-- timeout
-- scanner_unavailable
-- internal_error
-
-No ambiguous or partial results are exposed.
+This change introduces a first-class state.
 
 ---
 
-## Failure Scenarios
+## Degraded Scan State
 
-Post 8 explicitly defines behavior for failure cases:
+v0.4 introduces an explicit non-failure state:
 
-- Missing or out-of-order chunks
-- Size mismatch on finalization
-- Scanner timeouts
-- Scanner unavailability
-- Partial upload retries
+PENDING_SCAN
 
-In all cases:
-- State corruption is prevented
-- Failures do not cascade
-- Cleanup is deterministic
+This state represents:
+- A successfully finalized upload
+- A scan that could not be completed due to scanner unavailability
 
-Silent recovery is intentionally avoided.
+Files in this state:
+- Are quarantined
+- Must not be exposed to users
+- Must be eligible for later re-scan
 
----
-
-## Version Mapping
-
-Post 8 is implemented incrementally and mapped to git tags:
-
-- **v0.1**
-  - Upload initialization
-  - Chunk reception
-  - No scanning or final guarantees
-
-- **v0.2**
-  - Upload finalization
-  - Size and integrity checks
-  - Collision handling
-
-- **v0.3**
-  - Streaming malware scanning
-  - Scanner isolation and timeouts
-  - No shared disk between services
-
-- **v1.0**
-  - Consolidated guarantees
-  - Failure scenarios documented
-  - Architecture stabilized
-
-Refer to the repository `CHANGELOG.md` for detailed changes.
+PENDING_SCAN is a state, not a failure.
 
 ---
 
-## What Post 8 Does Not Guarantee
+## Guarantees
 
-Post 8 explicitly does **not** guarantee:
+Post 8 v0.4 guarantees the following:
 
-- Exactly-once processing
-- Asynchronous job durability
-- Cross-service transactional semantics
-- Automatic retries or recovery
+- Upload finalization is deterministic
+- Scanner outages do not block ingestion
+- All failure modes are explicit and machine-readable
+- No upload is silently dropped
+- No finalize attempt produces ambiguous outcomes
 
-These trade-of
+---
+
+## What Is Explicitly Not Guaranteed
+
+The following are intentionally not guaranteed in v0.4:
+
+- Exactly-once scan execution
+- Immediate scan completion
+- Automatic scan retry
+- Persistent pre-scan queues
+
+These omissions are intentional and derived from
+on-prem operational constraints.
+
+---
+
+## Related Documents
+
+- scan-contract.md
+- failure-reasons.md
+- testing-v0.4.md

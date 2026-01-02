@@ -1,3 +1,24 @@
+# Project Tree Generator
+
+Simple Node CLI to print a directory tree for the project.
+
+Usage examples:
+
+```bash
+# print workspace tree (text)
+node scripts/project-tree-generator.js .
+
+# limit depth to 2
+node scripts/project-tree-generator.js . --depth 2
+
+# output JSON
+node scripts/project-tree-generator.js . --format json
+
+# ignore folders (comma separated)
+node scripts/project-tree-generator.js . --ignore node_modules,vendor
+```
+
+The script is intentionally small and dependency-free.
 ## chaos/
 
 This directory contains scripts used to intentionally introduce failures.

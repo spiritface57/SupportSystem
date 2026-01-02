@@ -13,7 +13,7 @@ FILENAME=$(basename "$FILE")
 TOTAL_BYTES=$(stat -c%s "$FILE" 2>/dev/null || stat -f%z "$FILE")
 
 echo "Uploading $FILENAME ($TOTAL_BYTES bytes)"
-
+START=$(date +%s%3N)
 # 1️⃣ INIT
 INIT_RESPONSE=$(curl -s -X POST "$API/init" \
   -H "Content-Type: application/json" \
@@ -58,6 +58,10 @@ FINAL_RESPONSE=$(curl -s -X POST "$API/finalize" \
     \"filename\": \"$FILENAME\",
     \"total_bytes\": $TOTAL_BYTES
   }")
+END=$(date +%s%3N)
 
 echo "Finalize response:"
 echo "$FINAL_RESPONSE"
+
+LATENCY=$((END - START))
+echo "finalize_latency_ms=$LATENCY"
