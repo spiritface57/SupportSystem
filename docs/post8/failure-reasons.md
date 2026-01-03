@@ -11,16 +11,14 @@ Free-form values are not allowed.
 ## Scanner Failures
 
 scanner_unavailable
-scanner_busy
-scan_timeout
-scan_protocol_error
 
 ---
 
 ## Finalize Failures
 
+invalid_filename
 finalize_in_progress
-finalize_locked
+finalize_fs_race
 finalize_missing_chunks
 finalize_size_mismatch
 finalize_internal_error 

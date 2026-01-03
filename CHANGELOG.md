@@ -138,6 +138,10 @@ Failure reasons
 • reproducible scripts for batch uploads and failure simulations  
 • SQL metric queries derived from upload_events table
 
+Malware handling
+• infected is a terminal finalize status (infected files are finalized deterministically but never published)
+• infected is a state, not a failure reason
+
 Explicit non goals
 • no global upload state machine
 • no retry or queueing of failed scans

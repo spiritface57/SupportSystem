@@ -35,7 +35,6 @@ and never by finalize status.
 
 Failure reasons MUST be one of:
 
-- infected_file
 - finalize_size_mismatch
 - finalize_missing_chunks
 - finalize_fs_race
