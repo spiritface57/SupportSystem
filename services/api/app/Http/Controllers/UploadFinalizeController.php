@@ -13,16 +13,17 @@ class UploadFinalizeController extends Controller
 {
     public function __invoke(Request $request)
     {
+        // NOTE:
+        // - upload_id is mandatory
+        // - filename/total_bytes are accepted for client sanity but meta.json is the source of truth
         $data = $request->validate([
             'upload_id'   => 'required|uuid',
-            'filename'    => 'required|string|max:255',
-            'total_bytes' => 'required|integer|min:1',
+            'filename'    => 'sometimes|string|max:255',
+            'total_bytes' => 'sometimes|integer|min:1',
         ]);
 
-        $uploadId   = $data['upload_id'];
-        $filename   = $this->sanitizeFilename($data['filename']);
-        $totalBytes = (int) $data['total_bytes'];
-        $startedAt  = microtime(true);
+        $uploadId  = $data['upload_id'];
+        $startedAt = microtime(true);
 
         $lockHandle = null;
 
@@ -46,7 +47,7 @@ class UploadFinalizeController extends Controller
                 throw new \RuntimeException('orphan_upload');
             }
 
-            // Pre-check chunk completeness (fail fast)
+            // Load meta (source of truth)
             $metaPath = storage_path("app/uploads-meta/{$uploadId}/meta.json");
             if (!File::exists($metaPath)) {
                 throw new \RuntimeException('finalize_missing_chunks');
@@ -55,19 +56,72 @@ class UploadFinalizeController extends Controller
             $meta = json_decode(File::get($metaPath), true);
             $chunkBytes    = (int) ($meta['chunk_bytes'] ?? 0);
             $declaredTotal = (int) ($meta['total_bytes'] ?? 0);
+            $declaredName  = (string) ($meta['filename'] ?? '');
 
-            if ($chunkBytes < 1024 || $declaredTotal < 1) {
+            if ($chunkBytes < 1024 || $declaredTotal < 1 || $declaredName === '') {
                 throw new \RuntimeException('finalize_missing_chunks');
             }
 
-            $expectedChunks = (int) ceil($declaredTotal / $chunkBytes);
-            for ($i = 0; $i < $expectedChunks; $i++) {
-                if (!File::exists("{$chunksDir}/{$i}.part")) {
-                    throw new \RuntimeException('finalize_missing_chunks');
+            // Optional request sanity checks
+            if (isset($data['filename'])) {
+                $reqFilename = $this->sanitizeFilename((string) $data['filename']);
+                if ($reqFilename !== $declaredName) {
+                    return response()->json([
+                        'error'  => 'upload_failed',
+                        'reason' => 'contract_mismatch',
+                        'field'  => 'filename',
+                        'expected' => $declaredName,
+                        'got'      => $reqFilename,
+                    ], 409);
                 }
             }
 
-            // Assemble into TEMP
+            if (isset($data['total_bytes'])) {
+                $reqTotal = (int) $data['total_bytes'];
+                if ($reqTotal !== $declaredTotal) {
+                    return response()->json([
+                        'error'  => 'upload_failed',
+                        'reason' => 'contract_mismatch',
+                        'field'  => 'total_bytes',
+                        'expected' => $declaredTotal,
+                        'got'      => $reqTotal,
+                    ], 409);
+                }
+            }
+
+            $filename = $declaredName;
+            $totalBytes = $declaredTotal;
+
+            $expectedChunks = (int) ceil($declaredTotal / $chunkBytes);
+
+            // Pre-check chunk completeness (actionable)
+            $missing = [];
+            for ($i = 0; $i < $expectedChunks; $i++) {
+                if (!File::exists("{$chunksDir}/{$i}.part")) {
+                    $missing[] = $i;
+                }
+            }
+
+            if (!empty($missing)) {
+                // Emit failure (deterministic) - do not throw, return actionable response
+                $this->safeEmit('upload.failed', $uploadId, 'api', [
+                    'stage'  => 'finalize',
+                    'reason' => 'finalize_missing_chunks',
+                    'missing_count' => count($missing),
+                    // keep it small; don't flood DB for huge uploads
+                    'missing_sample' => array_slice($missing, 0, 50),
+                ]);
+
+                return response()->json([
+                    'error'  => 'upload_failed',
+                    'reason' => 'finalize_missing_chunks',
+                    'expected_chunks' => $expectedChunks,
+                    'missing_count'   => count($missing),
+                    'missing'         => array_slice($missing, 0, 200),
+                ], 409);
+            }
+
+            // Assemble into TEMP (deterministic: 0..expectedChunks-1 only)
             $tempDir = storage_path("app/tmp/{$uploadId}");
             File::ensureDirectoryExists($tempDir);
 
@@ -79,12 +133,12 @@ class UploadFinalizeController extends Controller
 
             $written = 0;
 
-            $chunks = collect(File::files($chunksDir))
-                ->sortBy(fn($f) => (int) pathinfo($f->getFilename(), PATHINFO_FILENAME));
+            for ($i = 0; $i < $expectedChunks; $i++) {
+                $chunkPath = "{$chunksDir}/{$i}.part";
 
-            foreach ($chunks as $chunk) {
-                $in = fopen($chunk->getPathname(), 'rb');
+                $in = fopen($chunkPath, 'rb');
                 if ($in === false) {
+                    fclose($out);
                     throw new \RuntimeException('finalize_internal_error');
                 }
 
@@ -92,12 +146,14 @@ class UploadFinalizeController extends Controller
                     $buf = fread($in, 8192);
                     if ($buf === false) {
                         fclose($in);
+                        fclose($out);
                         throw new \RuntimeException('finalize_internal_error');
                     }
 
                     $w = fwrite($out, $buf);
                     if ($w === false) {
                         fclose($in);
+                        fclose($out);
                         throw new \RuntimeException('finalize_internal_error');
                     }
 
