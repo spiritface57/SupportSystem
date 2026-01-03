@@ -94,3 +94,18 @@ on-prem operational constraints.
 
 ## Implementation PR
 - Post 8 hardening (chunk contracts, finalize determinism, pending scan worker): https://github.com/spiritface57/SupportSystem/pull/1
+
+## Scheduler Configuration
+
+This project registers the rescan worker via `bootstrap/app.php` scheduling:
+
+- Command: `upload:rescan-pending --limit=50`
+- Frequency: every minute
+- Overlap protection: `withoutOverlapping()`
+
+To run schedules in production, execute Laravel scheduler every minute:
+
+- `php artisan schedule:run`
+
+Example cron (host or scheduler container):
+`* * * * * cd services/api && php artisan schedule:run >> /dev/null 2>&1`
