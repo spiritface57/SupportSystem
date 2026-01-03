@@ -186,3 +186,8 @@ Notes
 • lock behavior must be deterministic under double finalize  
 • metrics are derived only from persisted events
 • for a given upload_id, exactly one finalize outcome must exist per finalize attempt
+
+## post8-v0.4.1
+- Implement infected files as terminal finalize state
+- Enforced event contract alignment with v0.4 guarantees
+- Hardened finalize determinism
