@@ -91,3 +91,6 @@ on-prem operational constraints.
 - scan-contract.md
 - failure-reasons.md
 - testing-v0.4.md
+
+## Implementation PR
+- Post 8 hardening (chunk contracts, finalize determinism, pending scan worker): https://github.com/spiritface57/SupportSystem/pull/1
