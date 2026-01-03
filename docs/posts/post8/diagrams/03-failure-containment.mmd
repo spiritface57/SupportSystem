@@ -1,0 +1,17 @@
+flowchart LR
+  C[Client] -->|REST| API[API Gateway / Laravel]
+  API --> FS[(Storage)]
+  API --> DB[(MySQL: upload_events)]
+  API --> SC[Scanner Service]
+
+  subgraph "Hard rules"
+    R1["No finalize blocked by scanner outage"]
+    R2["Only clean => final"]
+    R3["All non-clean => quarantine"]
+    R4["Idempotent rescan + per-upload lock"]
+  end
+
+  SC -. outage .- API
+  API -->|degrade| Q[(Quarantine)]
+  Q -->|scheduled worker| API
+  API -->|publish clean| F[(Final Storage)]
