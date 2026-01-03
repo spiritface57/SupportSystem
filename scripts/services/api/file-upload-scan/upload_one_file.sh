@@ -1,5 +1,5 @@
 #!/bin/bash
-set -euo pipefail
+set -uo pipefail
 
 API="${API_BASE:-http://localhost:8000/api/upload}"
 FILE="${1:-}"
@@ -38,6 +38,8 @@ echo "upload_id = $UPLOAD_ID"
 # 2️⃣ SPLIT FILE
 TMP_DIR=$(mktemp -d)
 split -b "$CHUNK_SIZE" -d "$FILE" "$TMP_DIR/chunk_"
+echo "Chunks generated:"
+
 
 INDEX=0
 for CHUNK in "$TMP_DIR"/chunk_*; do
