@@ -6,7 +6,7 @@ use InvalidArgumentException;
 
 class UploadEventSchema
 {
-    public const VERSION = 1;
+    public const VERSION = 2;
 
     public const EVENTS = [
         'upload.initiated',
@@ -24,18 +24,24 @@ class UploadEventSchema
     ];
 
     public const FAILURE_REASONS = [
+        // scanner
         'scanner_unavailable',
-        'scanner_timeout',
-        'infected_file',
-        'integrity_mismatch',
-        'orphan_upload',
-        'internal_error',
+        'scanner_busy',
+        'scan_timeout',
+        'scan_protocol_error',
+
+        // finalize
+        'finalize_in_progress',
+        'finalize_locked',
+        'finalize_missing_chunks',
+        'finalize_size_mismatch',
+        'finalize_internal_error',
     ];
 
-    public static function validate(string $eventName, string $source, array $payload): void
+    public static function validate(string $eventName, string $source, array $payload = []): void
     {
         if (!in_array($eventName, self::EVENTS, true)) {
-            throw new InvalidArgumentException("Invalid event_name: {$eventName}");
+            throw new InvalidArgumentException("Invalid event: {$eventName}");
         }
 
         if (!in_array($source, self::SOURCES, true)) {

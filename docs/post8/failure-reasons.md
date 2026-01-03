@@ -23,7 +23,7 @@ finalize_in_progress
 finalize_locked
 finalize_missing_chunks
 finalize_size_mismatch
-finalize_internal_error
+finalize_internal_error 
 
 ---
 
@@ -44,3 +44,12 @@ clean
 infected
 
 States must not be emitted as failure reasons.
+
+## Notes on Version Alignment
+
+Some failure reasons present in earlier implementations
+(e.g. integrity_mismatch, orphan_upload, internal_error)
+are considered legacy and must be mapped to the v0.4 reasons
+listed above before emitting upload.failed events.
+
+The schema is the enforcement mechanism, not the source of truth.

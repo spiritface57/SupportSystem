@@ -27,8 +27,8 @@ class UploadFinalizeController extends Controller
         $lockHandle = null;
 
         try {
-            /* Global finalize lock */
-            $lockFile = storage_path('app/tmp/finalize.lock');
+            /* Per-upload finalize lock */
+            $lockFile = storage_path("app/tmp/locks/finalize-{$uploadId}.lock");
             File::ensureDirectoryExists(dirname($lockFile));
 
             $lockHandle = fopen($lockFile, 'c');
@@ -46,6 +46,27 @@ class UploadFinalizeController extends Controller
                 throw new \RuntimeException('orphan_upload');
             }
 
+            /* Pre-check chunk completeness (fail fast) */
+            $metaPath = storage_path("app/uploads-meta/{$uploadId}/meta.json");
+            if (!File::exists($metaPath)) {
+                throw new \RuntimeException('finalize_missing_chunks');
+            }
+
+            $meta = json_decode(File::get($metaPath), true);
+            $chunkBytes = (int) ($meta['chunk_bytes'] ?? 0);
+            $declaredTotal = (int) ($meta['total_bytes'] ?? 0);
+
+            if ($chunkBytes < 1024 || $declaredTotal < 1) {
+                throw new \RuntimeException('finalize_missing_chunks');
+            }
+
+            $expectedChunks = (int) ceil($declaredTotal / $chunkBytes);
+            for ($i = 0; $i < $expectedChunks; $i++) {
+                if (!File::exists("{$chunksDir}/{$i}.part")) {
+                    throw new \RuntimeException('finalize_missing_chunks');
+                }
+            }
+
             /* Assemble into TEMP */
             $tempDir = storage_path("app/tmp/{$uploadId}");
             File::ensureDirectoryExists($tempDir);
@@ -53,7 +74,7 @@ class UploadFinalizeController extends Controller
             $tempAssembledPath = "{$tempDir}/assembled.bin";
             $out = fopen($tempAssembledPath, 'wb');
             if ($out === false) {
-                throw new \RuntimeException('temp_open_failed');
+                throw new \RuntimeException('finalize_internal_error');
             }
 
             $written = 0;
@@ -64,20 +85,20 @@ class UploadFinalizeController extends Controller
             foreach ($chunks as $chunk) {
                 $in = fopen($chunk->getPathname(), 'rb');
                 if ($in === false) {
-                    throw new \RuntimeException('chunk_open_failed');
+                    throw new \RuntimeException('finalize_internal_error');
                 }
 
                 while (!feof($in)) {
                     $buf = fread($in, 8192);
                     if ($buf === false) {
                         fclose($in);
-                        throw new \RuntimeException('chunk_read_failed');
+                        throw new \RuntimeException('finalize_internal_error');
                     }
 
                     $w = fwrite($out, $buf);
                     if ($w === false) {
                         fclose($in);
-                        throw new \RuntimeException('temp_write_failed');
+                        throw new \RuntimeException('finalize_internal_error');
                     }
 
                     $written += strlen($buf);
@@ -92,7 +113,7 @@ class UploadFinalizeController extends Controller
                 throw new \RuntimeException('integrity_mismatch');
             }
 
-            /* Scan decoupled */
+            /* Scan (degraded allowed) */
             $scanStatus = 'pending_scan';
 
             $this->safeEmit(
@@ -107,7 +128,7 @@ class UploadFinalizeController extends Controller
 
                 $stream = fopen($tempAssembledPath, 'rb');
                 if ($stream === false) {
-                    throw new \RuntimeException('temp_open_failed');
+                    throw new \RuntimeException('finalize_internal_error');
                 }
 
                 try {
@@ -133,14 +154,15 @@ class UploadFinalizeController extends Controller
                             'ip'        => $request->ip(),
                         ]);
 
+                        // infected is a state (not a failure reason); the file must NOT be promoted
                         $this->safeEmit(
-                            'upload.scan.failed',
+                            'upload.scan.completed',
                             $uploadId,
                             'api',
-                            ['reason' => 'infected_file']
+                            ['result' => 'infected', 'signature' => $body['signature'] ?? null]
                         );
 
-                        throw new \RuntimeException('infected_file');
+                        throw new \RuntimeException('finalize_internal_error');
                     }
 
                     if (($body['status'] ?? null) === 'clean') {
@@ -170,13 +192,24 @@ class UploadFinalizeController extends Controller
                 $scanStatus = 'pending_scan';
             }
 
-            /* Commit FINAL independent */
+            /* Commit FINAL (atomic) */
             $finalDir = storage_path("app/final/uploads/{$uploadId}");
             File::ensureDirectoryExists($finalDir);
 
             $finalPath = "{$finalDir}/{$filename}";
 
-            if (!File::copy($tempAssembledPath, $finalPath)) {
+            $tmpFinalPath = $finalPath . '.tmp';
+
+            if (!File::copy($tempAssembledPath, $tmpFinalPath)) {
+                throw new \RuntimeException('final_write_failed');
+            }
+
+            if (!@rename($tmpFinalPath, $finalPath)) {
+                // best-effort cleanup
+                try {
+                    File::delete($tmpFinalPath);
+                } catch (\Throwable $e) {
+                }
                 throw new \RuntimeException('final_write_failed');
             }
 
@@ -258,11 +291,11 @@ class UploadFinalizeController extends Controller
         $clean = basename($filename);
 
         if ($clean === '' || $clean === '.' || $clean === '..') {
-            throw new \RuntimeException('invalid_filename');
+            throw new \RuntimeException('finalize_internal_error');
         }
 
         if (str_contains($clean, "\0") || str_contains($clean, '/') || str_contains($clean, '\\')) {
-            throw new \RuntimeException('invalid_filename');
+            throw new \RuntimeException('finalize_internal_error');
         }
 
         return $clean;
@@ -272,39 +305,38 @@ class UploadFinalizeController extends Controller
     {
         $msg = strtolower((string) $e->getMessage());
 
-        if ($e instanceof \InvalidArgumentException) {
-            return 'invalid_event';
+        // Scanner interaction failures
+        if ($msg === 'scan_timeout' || str_contains($msg, 'timeout')) {
+            return 'scan_timeout';
+        }
+
+        if ($msg === 'scan_protocol_error') {
+            return 'scan_protocol_error';
         }
 
         if (
             str_contains($msg, 'curl error') ||
             str_contains($msg, 'could not resolve host') ||
             str_contains($msg, 'connection refused') ||
-            str_contains($msg, 'timed out') ||
-            str_contains($msg, 'timeout')
+            str_contains($msg, 'timed out')
         ) {
             return 'scanner_unavailable';
         }
 
-        if (
-            str_contains($msg, 'permission denied') ||
-            str_contains($msg, 'no such file') ||
-            str_contains($msg, 'mkdir(') ||
-            str_contains($msg, 'copy(') ||
-            str_contains($msg, 'fopen(')
-        ) {
-            return 'finalize_fs_race';
-        }
+        // Finalize failures
+        return match ($msg) {
+            'finalize_in_progress'    => 'finalize_in_progress',
 
-        return match ($e->getMessage()) {
-            'infected_file'        => 'infected_file',
-            'integrity_mismatch'   => 'integrity_mismatch',
-            'orphan_upload'        => 'orphan_upload',
-            'finalize_lock_failed' => 'finalize_fs_race',
-            'final_write_failed'   => 'finalize_fs_race',
-            'finalize_in_progress' => 'finalize_in_progress',
-            'invalid_filename'     => 'invalid_filename',
-            default                => 'internal_error',
+            'finalize_lock_failed',
+            'final_write_failed'      => 'finalize_locked',
+
+            'finalize_missing_chunks',
+            'orphan_upload'           => 'finalize_missing_chunks',
+
+            'finalize_size_mismatch',
+            'integrity_mismatch'      => 'finalize_size_mismatch',
+
+            default                   => 'finalize_internal_error',
         };
     }
 }

@@ -7,12 +7,44 @@ the implementation is wrong.
 
 ---
 
-## Core Invariant
+## Core Invariants
 
 Upload finalization must not depend on scanner availability.
 
 Scanner failures may degrade file availability.
 Scanner failures must not block ingestion or finalization.
+
+Infected files are finalized deterministically but never published.
+
+---
+
+## Contracts
+
+### Finalize Status
+
+Finalize MUST result in exactly one of the following statuses:
+
+- clean
+- pending_scan
+- infected
+
+Finalize failure is represented by an upload.failed event
+and never by finalize status.
+
+### Failure Reason Codes
+
+Failure reasons MUST be one of:
+
+- infected_file
+- finalize_size_mismatch
+- finalize_missing_chunks
+- finalize_fs_race
+- finalize_in_progress
+- scanner_unavailable
+- invalid_filename
+- finalize_internal_error
+
+Unknown reasons are a bug.
 
 ---
 
@@ -31,11 +63,12 @@ Command:
 ./scripts/services/api/file-upload-scan/upload_folder.sh ./test-files
 
 Expected behavior:
-upload.initiated event is emitted.
-upload.scan.started event is emitted.
-upload.scan.completed event is emitted.
-upload.finalized event is emitted.
-Finalize response status is clean.
+- upload.initiated event is emitted.
+- upload.scan.started event is emitted.
+- upload.scan.completed event is emitted with verdict=clean.
+- upload.finalized event is emitted.
+- Finalize response status is clean.
+- File is accessible via download endpoint.
 
 ---
 
@@ -49,13 +82,33 @@ docker stop scanner-service
 docker start scanner-service
 
 Expected behavior:
-upload.initiated event is emitted.
-upload.scan.failed event is emitted with reason scanner_unavailable.
-upload.finalized event is emitted.
-Finalize response status is pending_scan.
-No upload is rejected due to scanner unavailability.
+- upload.initiated event is emitted.
+- upload.scan.failed event is emitted with reason scanner_unavailable.
+- upload.finalized event is emitted.
+- Finalize response status is pending_scan.
+- No upload is rejected due to scanner unavailability.
 
 If upload.finalized is missing, this is a bug.
+
+---
+
+## Infected File Upload
+
+This scenario validates deterministic handling of malware.
+
+Command:
+./scripts/services/api/file-upload-scan/upload_file.sh ./test-files/eicar.txt
+
+Expected behavior:
+- upload.initiated event is emitted.
+- upload.scan.started event is emitted.
+- upload.scan.completed event is emitted with verdict=infected.
+- upload.finalized event is emitted.
+- Finalize response status is infected.
+- File is NOT accessible via any download or preview endpoint.
+- File is NOT published to final storage.
+
+If finalize fails instead of producing status=infected, this is a bug.
 
 ---
 
@@ -66,10 +119,51 @@ META=$(./scripts/prepare_upload_no_finalize.sh files/a.png)
 ./scripts/test_double_finalize_same_upload.sh "$META"
 
 Expected behavior:
-Exactly one finalize attempt succeeds.
-The second finalize attempt fails deterministically.
-Failure reason is finalize_in_progress.
-Upload events show one upload.finalized and one upload.failed.
+- Exactly one finalize attempt succeeds.
+- The second finalize attempt fails deterministically.
+- Failure reason is finalize_in_progress.
+- Upload events show:
+  - one upload.finalized
+  - one upload.failed
+
+---
+
+## Finalize With Missing Chunks
+
+Commands:
+META=$(./scripts/prepare_upload_incomplete_chunks.sh files/a.png)
+./scripts/finalize_upload.sh "$META"
+
+Expected behavior:
+- upload.failed event is emitted.
+- Failure reason is finalize_missing_chunks.
+- No upload.finalized event is emitted.
+
+---
+
+## Finalize With Size Mismatch
+
+Commands:
+META=$(./scripts/prepare_upload_size_mismatch.sh files/a.png)
+./scripts/finalize_upload.sh "$META"
+
+Expected behavior:
+- upload.failed event is emitted.
+- Failure reason is finalize_size_mismatch.
+- No upload.finalized event is emitted.
+
+---
+
+## Scanner Timeout Simulation
+
+Command:
+./scripts/services/scanner/simulate_timeout.sh
+
+Expected behavior:
+- upload.scan.failed event is emitted.
+- Failure reason is scanner_unavailable.
+- upload.finalized event is emitted.
+- Finalize response status is pending_scan.
 
 ---
 
@@ -77,15 +171,20 @@ Upload events show one upload.finalized and one upload.failed.
 
 After any test run:
 
-Every upload_id has at least one upload.initiated event.
-Every finalize attempt results in exactly one outcome.
-The outcome is either upload.finalized or upload.failed.
-No finalize attempt produces both.
+- Every upload_id has exactly one upload.initiated event.
+- Every finalize attempt results in exactly one outcome.
+- The outcome is either upload.finalized or upload.failed.
+- No finalize attempt produces both.
+- Infected uploads NEVER produce upload.failed.
 
 ---
 
 ## Notes
 
 Any nondeterministic result indicates a concurrency or locking bug.
+
 Scanner availability must not influence finalize determinism.
+
+Infected files are a state, not an error.
+
 A passing run must be reproducible across multiple executions.

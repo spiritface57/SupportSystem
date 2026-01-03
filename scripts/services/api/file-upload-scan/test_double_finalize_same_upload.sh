@@ -1,8 +1,9 @@
 #!/bin/bash
+set -euo pipefail
 
-API="http://localhost:8000/api/upload"
+API="${API_BASE:-http://localhost:8000/api/upload}"
 
-META="$1"
+META="${1:-}"
 UPLOAD_ID=$(echo "$META" | cut -d'|' -f1)
 FILENAME=$(echo "$META" | cut -d'|' -f2)
 TOTAL_BYTES=$(echo "$META" | cut -d'|' -f3)
@@ -13,7 +14,7 @@ if [ -z "$UPLOAD_ID" ] || [ -z "$FILENAME" ] || [ -z "$TOTAL_BYTES" ]; then
 fi
 
 call_finalize() {
-  curl -s -X POST "$API/finalize" \
+  curl -sS -X POST "$API/finalize" \
     -H "Content-Type: application/json" \
     -d "{
       \"upload_id\": \"$UPLOAD_ID\",
@@ -22,11 +23,8 @@ call_finalize() {
     }"
 }
 
-call_finalize &
-PID1=$!
-
-call_finalize &
-PID2=$!
+call_finalize & PID1=$!
+call_finalize & PID2=$!
 
 wait $PID1
 wait $PID2

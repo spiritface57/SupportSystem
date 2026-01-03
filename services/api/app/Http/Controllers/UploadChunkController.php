@@ -69,9 +69,10 @@ class UploadChunkController extends Controller
             $existingSize = File::size($target);
 
             if ($existingSize === $size) {
-                $this->safeEmit('upload.chunk.duplicate', $uploadId, 'api', [
+                $this->safeEmit('upload.chunk.received', $uploadId, 'api', [
                     'index' => $index,
                     'bytes' => $size,
+                    'duplicate' => true,
                 ]);
 
                 return response()->json([
@@ -96,6 +97,7 @@ class UploadChunkController extends Controller
         $this->safeEmit('upload.chunk.received', $uploadId, 'api', [
             'index' => $index,
             'bytes' => $size,
+            'duplicate' => false,
         ]);
 
         return response()->json([
