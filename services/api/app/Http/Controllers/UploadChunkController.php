@@ -21,7 +21,7 @@ class UploadChunkController extends Controller
         $index    = (int) $data['index'];
         $chunk    = $data['chunk'];
 
-        // load meta to enforce chunk_bytes and total_bytes contracts
+        // load meta to enforce contracts
         $metaPath = storage_path("app/uploads-meta/{$uploadId}/meta.json");
         if (!File::exists($metaPath)) {
             return response()->json([
@@ -31,16 +31,34 @@ class UploadChunkController extends Controller
         }
 
         $meta = json_decode(File::get($metaPath), true);
-        $maxChunkBytes = (int) ($meta['chunk_bytes'] ?? 0);
+        $totalBytes = (int) ($meta['total_bytes'] ?? 0);
+        $chunkBytes = (int) ($meta['chunk_bytes'] ?? 0);
 
-        if ($maxChunkBytes < 1024) {
+        if ($totalBytes < 1 || $chunkBytes < 1024) {
             return response()->json([
                 'error'  => 'upload_invalid_meta',
-                'reason' => 'chunk_bytes_missing',
+                'reason' => 'invalid_contract',
             ], 400);
         }
 
-        // enforce max chunk size
+        $expectedChunks = (int) ceil($totalBytes / $chunkBytes);
+        if ($expectedChunks < 1) {
+            return response()->json([
+                'error'  => 'upload_invalid_meta',
+                'reason' => 'invalid_expected_chunks',
+            ], 400);
+        }
+
+        // index must be within contract
+        if ($index >= $expectedChunks) {
+            return response()->json([
+                'error'  => 'invalid_chunk_index',
+                'reason' => 'index_out_of_range',
+                'index'  => $index,
+                'max'    => $expectedChunks - 1,
+            ], 422);
+        }
+
         $size = (int) $chunk->getSize();
         if ($size <= 0) {
             return response()->json([
@@ -49,14 +67,33 @@ class UploadChunkController extends Controller
             ], 422);
         }
 
-        // allow last chunk to be <= chunk_bytes, but never > chunk_bytes
-        if ($size > $maxChunkBytes) {
-            return response()->json([
-                'error'  => 'chunk_too_large',
-                'reason' => 'exceeds_declared_chunk_bytes',
-                'max'    => $maxChunkBytes,
-                'got'    => $size,
-            ], 413);
+        // strict sizing:
+        // - non-last chunk must be EXACT chunk_bytes
+        // - last chunk must be EXACT remaining bytes
+        $lastIndex = $expectedChunks - 1;
+        $remaining = $totalBytes - ($chunkBytes * $lastIndex);
+
+        if ($index < $lastIndex) {
+            if ($size !== $chunkBytes) {
+                return response()->json([
+                    'error'  => 'invalid_chunk_size',
+                    'reason' => 'non_last_chunk_must_match_chunk_bytes',
+                    'index'  => $index,
+                    'expected_bytes' => $chunkBytes,
+                    'got_bytes'      => $size,
+                ], 422);
+            }
+        } else {
+            // last chunk
+            if ($size !== $remaining) {
+                return response()->json([
+                    'error'  => 'invalid_chunk_size',
+                    'reason' => 'last_chunk_must_match_remaining_bytes',
+                    'index'  => $index,
+                    'expected_bytes' => $remaining,
+                    'got_bytes'      => $size,
+                ], 422);
+            }
         }
 
         $dir = storage_path("app/uploads/{$uploadId}");

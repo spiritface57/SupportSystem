@@ -6,7 +6,7 @@ use InvalidArgumentException;
 
 class UploadEventSchema
 {
-    public const VERSION = 3;
+    public const VERSION = 4;
 
     public const EVENTS = [
         'upload.initiated',
@@ -15,6 +15,7 @@ class UploadEventSchema
         'upload.scan.completed',
         'upload.scan.failed',
         'upload.finalized',
+        'upload.published', // NEW: published after pending_scan turns clean
         'upload.failed',
     ];
 
