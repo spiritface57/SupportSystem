@@ -4,6 +4,7 @@ namespace App\Console\Commands;
 
 use App\Support\UploadEventEmitter;
 use Illuminate\Console\Command;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -15,7 +16,7 @@ class RescanPendingUploads extends Command
 
     public function handle(): int
     {
-        $limit = (int) $this->option('limit');
+        $limit  = (int) $this->option('limit');
         $dryRun = (bool) $this->option('dry-run');
 
         $root = storage_path('app/quarantine/uploads');
@@ -38,10 +39,9 @@ class RescanPendingUploads extends Command
         foreach ($dirs as $dir) {
             $uploadId = basename($dir);
 
+            // Per-upload lock to prevent double processing across overlaps
             $lockHandle = null;
-
             try {
-                // Per-upload lock to prevent double publish (multiple workers / overlaps)
                 $lockFile = storage_path("app/tmp/locks/rescan-{$uploadId}.lock");
                 File::ensureDirectoryExists(dirname($lockFile));
 
@@ -55,16 +55,27 @@ class RescanPendingUploads extends Command
                     // another worker is already processing this upload
                     continue;
                 }
+            } catch (\Throwable $e) {
+                Log::warning('rescan_lock_exception', [
+                    'upload_id' => $uploadId,
+                    'error'     => $e->getMessage(),
+                ]);
+                if (is_resource($lockHandle)) {
+                    fclose($lockHandle);
+                }
+                continue;
+            }
 
-                // Expect exactly one quarantined file (named by meta filename)
+            try {
+                // Expect meta
                 $metaPath = storage_path("app/uploads-meta/{$uploadId}/meta.json");
                 if (!File::exists($metaPath)) {
                     Log::warning('rescan_skip_missing_meta', ['upload_id' => $uploadId]);
                     continue;
                 }
 
-                $meta = json_decode(File::get($metaPath), true);
-                $filename = (string) ($meta['filename'] ?? '');
+                $meta = json_decode(File::get($metaPath), true) ?: [];
+                $filename   = (string) ($meta['filename'] ?? '');
                 $totalBytes = (int) ($meta['total_bytes'] ?? 0);
 
                 if ($filename === '' || $totalBytes < 1) {
@@ -76,14 +87,30 @@ class RescanPendingUploads extends Command
                 if (!File::exists($quarantinePath)) {
                     Log::warning('rescan_skip_missing_quarantine_file', [
                         'upload_id' => $uploadId,
-                        'path' => $quarantinePath,
+                        'path'      => $quarantinePath,
                     ]);
                     continue;
                 }
 
-                // Simple idempotency marker (prevents reprocessing clean publishes)
+                // Marker file in quarantine directory
                 $marker = "{$dir}/.published";
+
+                // Strong idempotency: if already published (marker OR event exists), skip
                 if (File::exists($marker)) {
+                    continue;
+                }
+
+                $alreadyPublished = DB::table('upload_events')
+                    ->where('upload_id', $uploadId)
+                    ->where('event_name', 'upload.published')
+                    ->exists();
+
+                if ($alreadyPublished) {
+                    // reconcile filesystem marker to prevent future reprocessing
+                    try {
+                        File::put($marker, now()->toISOString());
+                    } catch (\Throwable $e) {
+                    }
                     continue;
                 }
 
@@ -94,6 +121,7 @@ class RescanPendingUploads extends Command
                     continue;
                 }
 
+                // Emit scan started (best effort)
                 try {
                     UploadEventEmitter::emit('upload.scan.started', $uploadId, 'api', [
                         'engine' => 'clamav',
@@ -102,14 +130,15 @@ class RescanPendingUploads extends Command
                 } catch (\Throwable $e) {
                     Log::warning('rescan_emit_failed', [
                         'upload_id' => $uploadId,
-                        'event' => 'upload.scan.started',
-                        'error' => $e->getMessage(),
+                        'event'     => 'upload.scan.started',
+                        'error'     => $e->getMessage(),
                     ]);
                 }
 
-                $verdict = 'pending_scan';
+                $verdict   = 'pending_scan';
                 $signature = null;
 
+                // Call scanner
                 try {
                     $stream = fopen($quarantinePath, 'rb');
                     if ($stream === false) {
@@ -135,7 +164,7 @@ class RescanPendingUploads extends Command
                     if (is_array($body) && ($body['status'] ?? null) === 'clean') {
                         $verdict = 'clean';
                     } elseif (is_array($body) && ($body['status'] ?? null) === 'infected') {
-                        $verdict = 'infected';
+                        $verdict   = 'infected';
                         $signature = $body['signature'] ?? null;
                     } else {
                         throw new \RuntimeException('scan_protocol_error');
@@ -143,7 +172,7 @@ class RescanPendingUploads extends Command
                 } catch (\Throwable $e) {
                     Log::warning('rescan_scanner_degraded', [
                         'upload_id' => $uploadId,
-                        'error' => $e->getMessage(),
+                        'error'     => $e->getMessage(),
                     ]);
 
                     try {
@@ -159,18 +188,18 @@ class RescanPendingUploads extends Command
                     continue;
                 }
 
-                // Emit scan completed
+                // Emit scan completed (best effort)
                 try {
                     UploadEventEmitter::emit('upload.scan.completed', $uploadId, 'api', array_filter([
-                        'verdict' => $verdict,
+                        'verdict'   => $verdict,
                         'signature' => $signature,
-                        'mode' => 'rescan_pending',
+                        'mode'      => 'rescan_pending',
                     ]));
                 } catch (\Throwable $e) {
                     Log::warning('rescan_emit_failed', [
                         'upload_id' => $uploadId,
-                        'event' => 'upload.scan.completed',
-                        'error' => $e->getMessage(),
+                        'event'     => 'upload.scan.completed',
+                        'error'     => $e->getMessage(),
                     ]);
                 }
 
@@ -180,11 +209,17 @@ class RescanPendingUploads extends Command
                     continue;
                 }
 
-                // Publish clean: move into final storage (atomic-ish with tmp + rename)
+                if ($verdict !== 'clean') {
+                    // leave quarantined
+                    $processed++;
+                    continue;
+                }
+
+                // Publish clean: tmp + rename (atomic-ish)
                 $finalDir = storage_path("app/final/uploads/{$uploadId}");
                 File::ensureDirectoryExists($finalDir);
 
-                $finalPath = "{$finalDir}/{$filename}";
+                $finalPath    = "{$finalDir}/{$filename}";
                 $tmpFinalPath = $finalPath . '.tmp';
 
                 if (!File::copy($quarantinePath, $tmpFinalPath)) {
@@ -203,39 +238,36 @@ class RescanPendingUploads extends Command
                     continue;
                 }
 
-                // Mark published and cleanup quarantine file (keep dir for audit if you want)
+                // Mark published and cleanup quarantine file
                 try {
                     File::put($marker, now()->toISOString());
+                    // optional: delete quarantined payload after publish
                     File::delete($quarantinePath);
                 } catch (\Throwable $e) {
                     Log::warning('rescan_cleanup_failed', [
                         'upload_id' => $uploadId,
-                        'error' => $e->getMessage(),
+                        'error'     => $e->getMessage(),
                     ]);
                 }
 
-                // Emit published
+                // Emit published (best effort)
                 try {
                     UploadEventEmitter::emit('upload.published', $uploadId, 'api', [
                         'bytes' => File::size($finalPath),
-                        'path'  => $finalPath,
+                        // keep it relative-ish for docs
+                        'path'  => "storage/app/final/uploads/{$uploadId}/{$filename}",
                     ]);
                 } catch (\Throwable $e) {
                     Log::warning('rescan_emit_failed', [
                         'upload_id' => $uploadId,
-                        'event' => 'upload.published',
-                        'error' => $e->getMessage(),
+                        'event'     => 'upload.published',
+                        'error'     => $e->getMessage(),
                     ]);
                 }
 
                 $processed++;
-            } catch (\Throwable $e) {
-                // last-resort safety; do not crash the whole command
-                Log::error('rescan_unhandled_exception', [
-                    'upload_id' => $uploadId,
-                    'error' => $e->getMessage(),
-                ]);
             } finally {
+                // Always release lock
                 if (is_resource($lockHandle)) {
                     flock($lockHandle, LOCK_UN);
                     fclose($lockHandle);
