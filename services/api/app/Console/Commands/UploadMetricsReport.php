@@ -100,7 +100,15 @@ class UploadMetricsReport extends Command
         $lines[] = "- upload.published count: {$publishedCount}";
         $lines[] = "";
 
-        file_put_contents(base_path($out), implode("\n", $lines) . "\n");
+        $path = base_path($out);
+        $dir  = dirname($path);
+
+        if (!is_dir($dir)) {
+            mkdir($dir, 0775, true);
+        }
+
+        file_put_contents($path, implode("\n", $lines) . "\n");
+
 
         $this->info("Wrote metrics report to: {$out}");
         return self::SUCCESS;
