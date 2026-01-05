@@ -361,3 +361,25 @@ These are tracked in project position and roadmap. fileciteturn0file2tu
 - [ ] Atomic commit (rename/move)
 - [ ] Stable error taxonomy mapping
 - [ ] Acceptance tests for failure scenarios
+
+
+---
+
+## Implementation Status (v1.0 – Measured)
+
+Implements Post 8 file pipeline hardening and adds measured metrics.
+
+- Scanner hardened (clamd socket + streaming limits + supervisord ordering)
+- Finalize degrades safely to `pending_scan` + quarantine when scanner is down
+- Idempotent rescan worker publishes clean files later (`upload.published`)
+- Deterministic metrics runner: `scripts/metrics/post8-metrics-run.sh`
+- Metrics sample tracked: `services/api/docs/posts/post8/metrics-sample.md`
+- Generated output ignored: `services/api/docs/posts/post8/metrics-output.md`
+
+### Reproduce Metrics (Deterministic)
+This script resets the local environment, runs controlled upload batches,
+forces scanner degradation, and regenerates metrics deterministically.
+
+```bash
+RUNS_CLEAN=0 RUNS_PENDING=5 FILE_BYTES=1242880 CHUNK_BYTES=1048576 \
+  bash scripts/metrics/post8-metrics-run.sh
