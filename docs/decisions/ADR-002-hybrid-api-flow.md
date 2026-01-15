@@ -1,7 +1,8 @@
 # ADR-002 — Hybrid API Flow (REST + GraphQL + WebSocket + gRPC)
 
 - **Status:** Accepted
-- **Date:** 2025-11
+- **Date:** 2026-01-15
+- **Revision:** 1
 - **Owner:** Mahmoudreza Abbasi
 - **Scope:** On-Prem Support Platform
 - **Related Posts:** Post 4 — The Hybrid API Flow
@@ -50,3 +51,7 @@ A single protocol choice forces bad compromises (overfetching, chat latency, int
 - More operational components (gateway routing, multiple protocol stacks).
 - Cleaner long-term separation: commands ≠ queries ≠ realtime.
 - Easier to scale each lane independently and contain failures by interaction type.
+
+## Revision History
+
+- **Rev 1 (2026-01-15):** Initial accepted version.
