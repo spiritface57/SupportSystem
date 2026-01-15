@@ -1,7 +1,8 @@
 # ADR-004 — Scanner Backend Strategy (Pluggable Engines, Stable Verdict Contract)
 
-- **Status:** Draft (target: Accepted before Post 09)
-- **Date:** 2025-12
+- **Status:** Draft
+- **Date:** 2026-01-15
+- **Revision:** 1
 - **Owner:** Mahmoudreza Abbasi
 - **Scope:** Malware scanning backend abstraction and future queue transport
 - **Related Posts:** Post 8 → Post 9 (planned)
@@ -46,6 +47,12 @@ We want future evolution:
 - **No scanner replacement in Post 08.**
 - Current scanner implementation becomes just one `ScannerBackend` adapter.
 
+## Non-Goals
+
+- Selecting or replacing the malware scanning engine in Post 08.
+- Implementing a full queue/outbox transport in Post 08.
+- Changing the upload/finalize pipeline semantics introduced in ADR-003.
+
 ## Options Considered
 
 ### Option A — Hardcode one scanner engine into pipeline
@@ -68,3 +75,7 @@ We want future evolution:
 - Establishes a long-lived contract that protects your pipeline from engine churn.
 - Enables queue-based transport later without changing finalize logic.
 - Requires strict versioning and careful observability (metrics + error codes).
+
+## Revision History
+
+- **Rev 1 (2026-01-15):** Initial draft.
