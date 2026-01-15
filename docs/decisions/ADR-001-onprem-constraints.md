@@ -1,7 +1,8 @@
 # ADR-001 — On-Prem Constraints and Non-Negotiables
 
 - **Status:** Accepted
-- **Date:** 2025-11
+- **Date:** 2026-01-15
+- **Revision:** 1
 - **Owner:** Mahmoudreza Abbasi
 - **Scope:** On-Prem Support Platform
 - **Related Posts:** Post 7 — Why Our On-Prem Ticketing System Starts With Limits, Not Features
@@ -16,6 +17,14 @@ This system targets enterprise on-prem deployments where:
 - Small IT teams operate the stack; operational complexity must be bounded.
 
 We must design for physics: storage behavior, network variability, and failure modes.
+
+## Constraints Snapshot (Targets)
+
+- **Capacity:** ~3M identities, 100k+ DAU, ~5k tickets/day, ~40% include large scanned documents.
+- **Storage ingest:** raw ~15–160 GB/day depending on scan source; optimized artifacts typically ~40–60% smaller.
+- **Network:** remote branches ~20–100ms latency, ~1–40 Mbps; disconnects are expected.
+- **Security:** every file is untrusted until quarantined + scanned.
+- **Availability:** target 99.98% uptime; tolerate ~10 minutes DB outage without UX collapse.
 
 ## Decision
 
@@ -64,3 +73,7 @@ We must design for physics: storage behavior, network variability, and failure m
 - Requires operating object storage (MinIO) and thinking in object lifecycle policies.
 - Adds more explicit pipeline contracts (idempotency, finalize tokens).
 - Enables predictable control-plane performance and smaller failure blast radius.
+
+## Revision History
+
+- **Rev 1 (2026-01-15):** Initial accepted version.
