@@ -12,11 +12,9 @@ Each ADR documents:
 ## Rules
 
 - **Immutable filenames (after Accepted):** once an ADR is **Accepted**, its filename must never change.
-- **Drafts may be renamed:** while an ADR is **Draft**, it can be renamed to fix typos or improve clarity.
+- **Drafts may be renamed:** while an ADR is **Draft**, its filename may change to fix typos or improve clarity.
 - **One decision per ADR:** keep scope tight.
-- **Internal versioning:** changes to an accepted ADR must be recorded inside the file via:
-  - `Revision: <n>` in the header, and
-  - a `Revision History` section at the end.
+- **Internal versioning:** changes to an accepted ADR are recorded inside the ADR via a `Revision:` field and a `Revision History` section.
 
 ## Status values
 
