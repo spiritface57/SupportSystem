@@ -1,7 +1,9 @@
 # ADR-003 — File Upload & Processing Pipeline (v0.4)
 
 - **Status:** Accepted
-- **Date:** 2025-11
+- **Date:** 2026-01-15
+- **Revision:** 1
+- **Decision Version:** v0.4
 - **Owner:** Mahmoudreza Abbasi
 - **Scope:** File ingest, quarantine, scanning, deterministic finalization
 - **Related Posts:** Post 8 — File Upload & Processing Pipeline (v1.0 doc)
@@ -16,6 +18,11 @@ On-prem file ingest must survive:
 
 Security constraint: all files are untrusted until scanned.
 Reliability constraint: finalize must be deterministic and auditable.
+
+## Notes on Versioning
+
+This ADR captures the **implementation decision set (v0.4)** for the file pipeline.
+The referenced Post 8 document is **v1.0 documentation maturity**, not a statement that the implementation has changed versions.
 
 ## Decision
 
@@ -54,3 +61,7 @@ Reliability constraint: finalize must be deterministic and auditable.
 - Requires quarantine semantics and clear UX (“processing / pending scan”).
 - Pipeline becomes testable via deterministic scripts and measurable metrics.
 - Sets up clean separation for future queue-based scan jobs without rewriting finalize.
+
+## Revision History
+
+- **Rev 1 (2026-01-15):** Initial accepted version.
