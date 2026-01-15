@@ -2,8 +2,11 @@
 
 - **Status:** Draft | Accepted | Superseded
 - **Date:** YYYY-MM-DD
+- **Revision:** 1
 - **Owner:** Mahmoudreza Abbasi
 - **Scope:** On-Prem Support Platform
+- **Supersedes:** (optional) ADR-XYZ
+- **Superseded by:** (optional) ADR-XYZ
 - **Related Posts:** (optional) Post X — <title>
 - **Related Docs/Diagrams:** (optional) links
 
@@ -40,3 +43,7 @@ What new responsibilities/risks does this introduce?
 
 - TODO items or future upgrades
 - Testability/observability notes
+
+## Revision History
+
+- **Rev 1 (YYYY-MM-DD):** Initial template.
