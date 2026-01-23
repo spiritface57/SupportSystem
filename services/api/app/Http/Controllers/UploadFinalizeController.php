@@ -64,7 +64,18 @@ class UploadFinalizeController extends Controller
 
             // Optional request sanity checks
             if (isset($data['filename'])) {
-                $reqFilename = $this->sanitizeFilename((string) $data['filename']);
+                // IMPORTANT: invalid client filename is a client error, not a system failure
+                try {
+                    $reqFilename = $this->sanitizeFilename((string) $data['filename']);
+                } catch (\Throwable $e) {
+                    return response()->json([
+                        'error'  => 'upload_failed',
+                        'reason' => 'contract_mismatch',
+                        'field'  => 'filename',
+                        'detail' => 'invalid_filename',
+                    ], 422);
+                }
+
                 if ($reqFilename !== $declaredName) {
                     return response()->json([
                         'error'  => 'upload_failed',
@@ -103,12 +114,10 @@ class UploadFinalizeController extends Controller
             }
 
             if (!empty($missing)) {
-                // Emit failure (deterministic) - do not throw, return actionable response
                 $this->safeEmit('upload.failed', $uploadId, 'api', [
                     'stage'  => 'finalize',
                     'reason' => 'finalize_missing_chunks',
                     'missing_count' => count($missing),
-                    // keep it small; don't flood DB for huge uploads
                     'missing_sample' => array_slice($missing, 0, 50),
                 ]);
 
@@ -193,48 +202,53 @@ class UploadFinalizeController extends Controller
                     fclose($stream);
                 }
 
-                if ($scannerResponse->ok()) {
-                    $body = $scannerResponse->json();
+                if (!$scannerResponse->ok()) {
+                    throw new \RuntimeException('scan_protocol_error');
+                }
 
-                    if (is_array($body) && ($body['status'] ?? null) === 'infected') {
-                        $signature = $body['signature'] ?? null;
+                $body = $scannerResponse->json();
+                if (!is_array($body) || !isset($body['status'])) {
+                    throw new \RuntimeException('scan_protocol_error');
+                }
 
-                        Log::channel('infected')->warning('infected_upload', [
-                            'upload_id' => $uploadId,
-                            'filename'  => $filename,
-                            'bytes'     => $written,
-                            'sha256'    => $hash,
-                            'signature' => $signature,
-                            'ip'        => $request->ip(),
-                        ]);
+                if (($body['status'] ?? null) === 'infected') {
+                    $signature = $body['signature'] ?? null;
 
-                        $this->safeEmit('upload.scan.completed', $uploadId, 'api', [
-                            'verdict'   => 'infected',
-                            'signature' => $signature,
-                        ]);
+                    Log::channel('infected')->warning('infected_upload', [
+                        'upload_id' => $uploadId,
+                        'filename'  => $filename,
+                        'bytes'     => $written,
+                        'sha256'    => $hash,
+                        'signature' => $signature,
+                        'ip'        => $request->ip(),
+                    ]);
 
-                        $scanStatus = 'infected';
-                    } elseif (($body['status'] ?? null) === 'clean') {
-                        $this->safeEmit('upload.scan.completed', $uploadId, 'api', [
-                            'verdict' => 'clean',
-                        ]);
+                    $this->safeEmit('upload.scan.completed', $uploadId, 'api', [
+                        'verdict'   => 'infected',
+                        'signature' => $signature,
+                    ]);
 
-                        $scanStatus = 'clean';
-                    } else {
-                        // unknown scanner payload -> treat as unavailable (do not block finalize)
-                        throw new \RuntimeException('scan_protocol_error');
-                    }
+                    $scanStatus = 'infected';
+                } elseif (($body['status'] ?? null) === 'clean') {
+                    $this->safeEmit('upload.scan.completed', $uploadId, 'api', [
+                        'verdict' => 'clean',
+                    ]);
+
+                    $scanStatus = 'clean';
                 } else {
                     throw new \RuntimeException('scan_protocol_error');
                 }
             } catch (\Throwable $e) {
+                $scanReason = $this->mapScanFailureReason($e);
+
                 Log::warning('scanner_degraded', [
                     'upload_id' => $uploadId,
                     'error'     => $e->getMessage(),
+                    'mapped'    => $scanReason,
                 ]);
 
                 $this->safeEmit('upload.scan.failed', $uploadId, 'api', [
-                    'reason' => 'scanner_unavailable',
+                    'reason' => $scanReason,
                 ]);
 
                 $scanStatus = 'pending_scan';
@@ -359,29 +373,49 @@ class UploadFinalizeController extends Controller
         return $clean;
     }
 
-    private function mapFailureReason(\Throwable $e): string
+    private function mapScanFailureReason(\Throwable $e): string
     {
         $msg = strtolower((string) $e->getMessage());
 
-        // Scanner interaction failures normalized
+        if ($msg === 'scan_protocol_error') {
+            return 'scan_protocol_error';
+        }
+
+        // Heuristic: timeouts
+        if ($msg === 'scan_timeout' || str_contains($msg, 'timeout') || str_contains($msg, 'timed out')) {
+            return 'scan_timeout';
+        }
+
+        // Common connectivity cases
         if (
-            $msg === 'scan_timeout' ||
-            $msg === 'scan_protocol_error' ||
-            str_contains($msg, 'timeout') ||
             str_contains($msg, 'curl error') ||
             str_contains($msg, 'could not resolve host') ||
-            str_contains($msg, 'connection refused') ||
-            str_contains($msg, 'timed out')
+            str_contains($msg, 'connection refused')
         ) {
             return 'scanner_unavailable';
         }
 
+        return 'scanner_unavailable';
+    }
+
+    private function mapFailureReason(\Throwable $e): string
+    {
+        $msg = strtolower((string) $e->getMessage());
+
+        // Scanner failures should NOT leak into finalize failures, but if they do:
+        if ($msg === 'scan_protocol_error') {
+            return 'finalize_internal_error';
+        }
+
+        if ($msg === 'scan_timeout') {
+            return 'finalize_internal_error';
+        }
+
         return match ($msg) {
-            'invalid_filename'        => 'invalid_filename',
             'finalize_in_progress'    => 'finalize_in_progress',
 
             'finalize_lock_failed',
-            'final_write_failed'      => 'finalize_fs_race',
+            'final_write_failed'      => 'finalize_locked',
 
             'finalize_missing_chunks',
             'orphan_upload'           => 'finalize_missing_chunks',

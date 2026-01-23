@@ -6,7 +6,7 @@ use InvalidArgumentException;
 
 class UploadEventSchema
 {
-    public const VERSION = 4;
+    public const VERSION = 5;
 
     public const EVENTS = [
         'upload.initiated',
@@ -15,7 +15,7 @@ class UploadEventSchema
         'upload.scan.completed',
         'upload.scan.failed',
         'upload.finalized',
-        'upload.published', // NEW: published after pending_scan turns clean
+        'upload.published', // allowed but not required in v0.4
         'upload.failed',
     ];
 
@@ -27,11 +27,12 @@ class UploadEventSchema
     public const FAILURE_REASONS = [
         // scanner
         'scanner_unavailable',
+        'scan_timeout',
+        'scan_protocol_error',
 
         // finalize
-        'invalid_filename',
         'finalize_in_progress',
-        'finalize_fs_race',
+        'finalize_locked',
         'finalize_missing_chunks',
         'finalize_size_mismatch',
         'finalize_internal_error',
