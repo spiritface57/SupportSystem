@@ -238,6 +238,41 @@ This is the “decoupling” principle: scanner failure becomes a recoverable pr
 - atomically move `file.tmp` into `final/<filename>` (same filesystem)
 - set state `finalized` or `clean` (depending on whether scan already passed)
 
+## 8.6 Finalize concurrency (proof)
+
+Finalize is designed to be safe under real multi-process concurrency.
+
+To validate this, a deterministic concurrency test was executed under
+nginx + php-fpm with multiple workers enabled.
+
+The test forces two finalize requests for the same `upload_id`
+to overlap in time, using an explicit barrier inside the finalize path.
+
+Observed behavior:
+
+- The first finalize call acquires the lock and blocks before commit.
+- A concurrent finalize attempt, arriving before commit, fails with:
+
+  `finalize_in_progress`
+
+- After the first finalize commits successfully, any subsequent finalize
+  attempt fails deterministically with:
+
+  `finalize_locked (duplicate_finalize)`
+
+This proves that:
+
+- Finalize is mutually exclusive per `upload_id`
+- The lock is effective across multiple workers
+- Pre-commit and post-commit races are explicitly distinguishable
+- No duplicate or partial finalization is possible
+
+In local single-worker environments, `finalize_in_progress` may not be observable.
+This is an environment limitation, not a pipeline limitation.
+
+Under multi-worker execution, both outcomes are guaranteed and reproducible.
+
+
 ---
 
 ## 9) Failure taxonomy (stable error codes)
