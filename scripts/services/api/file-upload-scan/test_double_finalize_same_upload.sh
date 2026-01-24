@@ -86,10 +86,19 @@ OUT2="$OUT_DIR/f2.txt"
 
 finalize_call() {
   local out="$1"
+  local barrier="${2:-0}"
+
+  local hdrs=()
+  hdrs+=(-H "Content-Type: application/json")
+  if [ "$barrier" = "1" ]; then
+    hdrs+=(-H "X-Test-Barrier: 1")
+  fi
+
   curl -sS -w "\nHTTP_STATUS:%{http_code}\n" -X POST "$API_BASE/finalize" \
-    -H "Content-Type: application/json" \
+    "${hdrs[@]}" \
     -d "{\"upload_id\":\"$UPLOAD_ID\",\"filename\":\"$FILENAME\",\"total_bytes\":$TOTAL_BYTES}" > "$out"
 }
+
 
 echo "NOTE: finalize#1 must BLOCK at barrier, finalize#2 should hit while lock is held."
 
@@ -98,7 +107,7 @@ MARK="TEST_DOUBLE_FINALIZE_MARKER upload_id=${UPLOAD_ID} ts=$(date +%s%3N)"
 docker exec "$API_CONTAINER" sh -lc "echo '$MARK' >> storage/logs/laravel.log"
 
 # Start finalize #1 (should BLOCK at barrier)
-finalize_call "$OUT1" & PID1=$!
+finalize_call "$OUT1" 1 & PID1=$!
 
 echo "Waiting for finalize#1 to enter barrier (by checking storage/logs/laravel.log)..."
 
@@ -127,7 +136,7 @@ else
 fi
 
 # Start finalize #2 (should fail with finalize_in_progress IF concurrency+lock is real)
-finalize_call "$OUT2" & PID2=$!
+finalize_call "$OUT2" 1 & PID2=$!
 
 # Give finalize #2 a moment to hit the server
 sleep 0.3
@@ -139,36 +148,57 @@ docker exec "$API_CONTAINER" sh -lc "mkdir -p $(dirname "$BARRIER_FILE") && date
 wait "$PID2" || true
 wait "$PID1" || true
 
+OUT3="$OUT_DIR/f3.txt"
+
+# Finalize #3 after commit (should be finalize_locked / duplicate_finalize)
+finalize_call "$OUT3" 0 || true
+
 echo "---- FINALIZE 1 ----"
 cat "$OUT1"
 echo
 echo "---- FINALIZE 2 ----"
 cat "$OUT2"
 echo
+echo "---- FINALIZE 3 ----"
+cat "$OUT3"
+echo
 
 F2_HAS_INPROG="$(grep -c '"reason"[[:space:]]*:[[:space:]]*"finalize_in_progress"' "$OUT2" 2>/dev/null || true)"
 F2_HAS_LOCKED="$(grep -c '"reason"[[:space:]]*:[[:space:]]*"finalize_locked"' "$OUT2" 2>/dev/null || true)"
 F2_HTTP="$(sed -n 's/.*HTTP_STATUS:\([0-9]\{3\}\).*/\1/p' "$OUT2" | tail -n 1 || true)"
 
+F2_OK=0
+F3_OK=0
+
 if [ "${F2_HAS_INPROG:-0}" -ge 1 ]; then
-  echo "✅ PASS: finalize#2 got finalize_in_progress (real concurrency + lock works)"
+  echo "✅ PASS: finalize#2 got finalize_in_progress (pre-commit concurrent attempt)"
+  F2_OK=1
+elif [ "${F2_HAS_LOCKED:-0}" -ge 1 ]; then
+  echo "⚠️  finalize#2 got finalize_locked (race window missed OR barrier not active)"
+  F2_OK=0
+else
+  echo "❌ FAIL: finalize#2 unexpected response (HTTP_STATUS=${F2_HTTP:-unknown})"
+  F2_OK=0
+fi
+
+F3_HAS_LOCKED="$(grep -c '"reason"[[:space:]]*:[[:space:]]*"finalize_locked"' "$OUT3" 2>/dev/null || true)"
+if [ "${F3_HAS_LOCKED:-0}" -ge 1 ]; then
+  echo "✅ PASS: finalize#3 got finalize_locked (post-commit duplicate)"
+  F3_OK=1
+else
+  echo "❌ FAIL: finalize#3 expected finalize_locked (post-commit duplicate)"
+  F3_OK=0
+fi
+
+# Final decision
+if [ "$F2_OK" = "1" ] && [ "$F3_OK" = "1" ]; then
+  echo "✅ PASS: concurrency window validated (in_progress pre-commit, locked post-commit)"
   rm -rf "$OUT_DIR"
   exit 0
 fi
 
-# If barrier wasn't observed, it's possible finalize#2 hits after commit and gets finalize_locked.
-if [ "${F2_HAS_LOCKED:-0}" -ge 1 ]; then
-  echo "⚠️  Got finalize_locked instead of finalize_in_progress."
-  echo "   This usually means finalize#2 arrived after commit (race window missed), or barrier didn't actually block."
-  echo "   Check barrier wiring and/or increase delay/window on finalize#1."
-  rm -rf "$OUT_DIR"
-  exit 1
-fi
-
-echo "❌ FAIL: finalize#2 did NOT get finalize_in_progress (HTTP_STATUS=${F2_HTTP:-unknown})"
-echo "   Next debug steps:"
-echo "   - confirm barrier logs exist in storage/logs/laravel.log"
-echo "   - confirm FINALIZE_BARRIER is enabled in the app runtime"
-echo "   - instrument PID/microtime around lock acquisition"
+echo "❌ FAIL: concurrency validation incomplete"
+echo "   - finalize#2 should be finalize_in_progress when barrier holds the lock"
+echo "   - finalize#3 should be finalize_locked after commit"
 rm -rf "$OUT_DIR"
 exit 1
