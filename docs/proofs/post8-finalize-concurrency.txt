@@ -1,0 +1,25 @@
+Preparing upload for a.png (2059906 bytes)
+API_BASE=http://localhost:8000/api/upload
+CHUNK_SIZE=1048576
+API_CONTAINER=supportsystempipeline-php-1
+init status=201 body={"upload_id":"d07b31e5-8cf5-40b3-aa6f-e3b5d95226bd","filename":"a.png","total_bytes":2059906,"chunk_bytes":1048576}
+upload_id=d07b31e5-8cf5-40b3-aa6f-e3b5d95226bd
+local chunks: 2
+chunk index=0 status=200 body={"received":true,"index":0,"bytes":1048576}
+chunk index=1 status=200 body={"received":true,"index":1,"bytes":1011330}
+Uploaded 2 chunks
+Barrier file (in container)=storage/app/tmp/barriers/finalize-d07b31e5-8cf5-40b3-aa6f-e3b5d95226bd.release
+NOTE: finalize#1 must BLOCK at barrier, finalize#2 should hit while lock is held.
+Waiting for finalize#1 to enter barrier (by checking storage/logs/laravel.log)...
+✅ Observed barrier_wait for upload_id=d07b31e5-8cf5-40b3-aa6f-e3b5d95226bd
+Releasing barrier by creating file inside container...
+-rw-r--r-- 1 root root 29 Jan 24 04:51 storage/app/tmp/barriers/finalize-d07b31e5-8cf5-40b3-aa6f-e3b5d95226bd.release
+---- FINALIZE 1 ----
+{"finalized":true,"status":"clean","bytes":2059906,"path":"\/var\/www\/storage\/app\/final\/uploads\/d07b31e5-8cf5-40b3-aa6f-e3b5d95226bd\/a.png"}
+HTTP_STATUS:200
+
+---- FINALIZE 2 ----
+{"error":"upload_failed","reason":"finalize_in_progress"}
+HTTP_STATUS:409
+
+✅ PASS: finalize#2 got finalize_in_progress (real concurrency + lock works)
