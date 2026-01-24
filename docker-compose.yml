@@ -7,6 +7,8 @@ services:
       - ./docker/php-fpm/zz-pm.conf:/usr/local/etc/php-fpm.d/zz-pm.conf:ro
     environment:
       SCANNER_BASE_URL: http://scanner:3001
+      FINALIZE_BARRIER: 1
+      FINALIZE_BARRIER_TIMEOUT_MS: 15000
 
   web:
     image: nginx:alpine

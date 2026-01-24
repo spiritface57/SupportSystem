@@ -62,7 +62,19 @@ class UploadFinalizeController extends Controller
                 'cfg_finalize_barrier' => config('upload.finalize_barrier'),
             ]);
 
-            $barrierEnabled = (bool) config('upload.finalize_barrier', false);
+
+            $cfgEnabled = (bool) config('upload.finalize_barrier.enabled', false);
+            $headerEnabled = request()->header('X-Test-Barrier') === '1';
+            $envOk = app()->environment(['local', 'testing']);
+
+            $barrierEnabled = $cfgEnabled && $envOk && $headerEnabled;
+
+            Log::info('finalize_barrier_probe', [
+                'env_FINALIZE_BARRIER' => env('FINALIZE_BARRIER'),
+                'cfg_finalize_barrier' => $cfgEnabled,
+                'hdr_X_Test_Barrier' => request()->header('X-Test-Barrier'),
+                'barrierEnabled' => $barrierEnabled,
+            ]);
             if ($barrierEnabled) {
                 $timeoutMs = (int) config('upload.finalize_barrier_timeout_ms', 15000);
 
