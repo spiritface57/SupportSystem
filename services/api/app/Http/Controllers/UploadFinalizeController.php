@@ -2,33 +2,29 @@
 
 namespace App\Http\Controllers;
 
+use App\Support\UploadEventEmitter;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
-use App\Support\UploadEventEmitter;
 use Symfony\Component\HttpFoundation\Response;
 
 class UploadFinalizeController extends Controller
 {
     public function __invoke(Request $request)
     {
-        // NOTE:
-        // - upload_id is mandatory
-        // - filename/total_bytes are accepted for client sanity but meta.json is the source of truth
         $data = $request->validate([
             'upload_id'   => 'required|uuid',
             'filename'    => 'sometimes|string|max:255',
             'total_bytes' => 'sometimes|integer|min:1',
         ]);
 
-        $uploadId  = $data['upload_id'];
-        $startedAt = microtime(true);
-
+        $uploadId   = (string) $data['upload_id'];
+        $startedAt  = microtime(true);
         $lockHandle = null;
 
         try {
-            // Per-upload finalize lock
+            /* -------------------- LOCK (per upload) -------------------- */
             $lockFile = storage_path("app/tmp/locks/finalize-{$uploadId}.lock");
             File::ensureDirectoryExists(dirname($lockFile));
 
@@ -37,163 +33,235 @@ class UploadFinalizeController extends Controller
                 throw new \RuntimeException('finalize_lock_failed');
             }
 
+            // If another finalize is running for this upload_id, return 409 deterministically.
             if (!flock($lockHandle, LOCK_EX | LOCK_NB)) {
-                throw new \RuntimeException('finalize_in_progress');
+                return response()->json([
+                    'error'  => 'upload_failed',
+                    'reason' => 'finalize_in_progress',
+                ], 409);
             }
 
-            // Locate chunks
-            $chunksDir = storage_path("app/uploads/{$uploadId}");
-            if (!is_dir($chunksDir)) {
-                throw new \RuntimeException('orphan_upload');
-            }
+            /**
+             * TEST / CHAOS ONLY (Barrier)
+             * Deterministically force overlap:
+             * - finalize#1 acquires lock, then waits here
+             * - finalize#2 hits while lock is held -> must return finalize_in_progress
+             *
+             * Enable by env:
+             *   FINALIZE_BARRIER=1
+             * Optional:
+             *   FINALIZE_BARRIER_TIMEOUT_MS=15000
+             *
+             * Barrier file path:
+             *   storage/app/tmp/barriers/finalize-<upload_id>.release
+             *
+             * Test script should create that file from inside the container or via docker exec.
+             */
+            Log::info('finalize_barrier_probe', [
+                'env_FINALIZE_BARRIER' => env('FINALIZE_BARRIER'),
+                'cfg_finalize_barrier' => config('upload.finalize_barrier'),
+            ]);
 
-            // Load meta (source of truth)
-            $metaPath = storage_path("app/uploads-meta/{$uploadId}/meta.json");
-            if (!File::exists($metaPath)) {
-                throw new \RuntimeException('finalize_missing_chunks');
-            }
+            $barrierEnabled = (bool) config('upload.finalize_barrier', false);
+            if ($barrierEnabled) {
+                $timeoutMs = (int) config('upload.finalize_barrier_timeout_ms', 15000);
 
-            $meta = json_decode(File::get($metaPath), true);
-            $chunkBytes    = (int) ($meta['chunk_bytes'] ?? 0);
-            $declaredTotal = (int) ($meta['total_bytes'] ?? 0);
-            $declaredName  = (string) ($meta['filename'] ?? '');
+                $barrierDir = storage_path("app/tmp/barriers");
+                File::ensureDirectoryExists($barrierDir);
 
-            if ($chunkBytes < 1024 || $declaredTotal < 1 || $declaredName === '') {
-                throw new \RuntimeException('finalize_missing_chunks');
-            }
+                $barrierFile = "{$barrierDir}/finalize-{$uploadId}.release";
 
-            // Optional request sanity checks
-            if (isset($data['filename'])) {
-                // IMPORTANT: invalid client filename is a client error, not a system failure
-                try {
-                    $reqFilename = $this->sanitizeFilename((string) $data['filename']);
-                } catch (\Throwable $e) {
-                    return response()->json([
-                        'error'  => 'upload_failed',
-                        'reason' => 'contract_mismatch',
-                        'field'  => 'filename',
-                        'detail' => 'invalid_filename',
-                    ], 422);
+                Log::info('finalize_barrier_wait', [
+                    'upload_id' => $uploadId,
+                    'file'      => $barrierFile,
+                    'timeoutMs' => $timeoutMs,
+                ]);
+
+                $start = microtime(true);
+                while (!File::exists($barrierFile)) {
+                    usleep(50 * 1000); // 50ms
+
+                    $elapsedMs = (int) ((microtime(true) - $start) * 1000);
+                    if ($elapsedMs >= $timeoutMs) {
+                        Log::warning('finalize_barrier_timeout', [
+                            'upload_id' => $uploadId,
+                            'elapsedMs' => $elapsedMs,
+                        ]);
+
+                        return response()->json([
+                            'error'  => 'upload_failed',
+                            'reason' => 'finalize_internal_error',
+                            'detail' => 'barrier_timeout',
+                        ], 500);
+                    }
                 }
 
-                if ($reqFilename !== $declaredName) {
+                // consume barrier (so next runs don't auto-pass)
+                try {
+                    File::delete($barrierFile);
+                } catch (\Throwable $e) {
+                }
+
+                Log::info('finalize_barrier_released', [
+                    'upload_id' => $uploadId,
+                ]);
+            }
+
+            /**
+             * TEST / CHAOS ONLY (simple delay)
+             * Optional: artificial delay AFTER lock (safe for concurrency tests).
+             * Enable by env:
+             *   FINALIZE_TEST_DELAY_MS=2000
+             */
+            $delayMs = (int) env('FINALIZE_TEST_DELAY_MS', 0);
+            if ($delayMs > 0) {
+                Log::info('finalize_delay_enter', ['ms' => $delayMs, 'upload_id' => $uploadId]);
+                usleep($delayMs * 1000);
+                Log::info('finalize_delay_exit', ['ms' => $delayMs, 'upload_id' => $uploadId]);
+            }
+
+            /* -------------------- META & PATHS -------------------- */
+            $chunksDir = storage_path("app/uploads/{$uploadId}");
+            $metaPath  = storage_path("app/uploads-meta/{$uploadId}/meta.json");
+
+            if (!is_dir($chunksDir) || !File::exists($metaPath)) {
+                throw new \RuntimeException('finalize_missing_chunks');
+            }
+
+            $meta = json_decode(File::get($metaPath), true) ?: [];
+            $filename   = (string) ($meta['filename'] ?? '');
+            $totalBytes = (int)    ($meta['total_bytes'] ?? 0);
+            $chunkBytes = (int)    ($meta['chunk_bytes'] ?? 0);
+
+            if ($filename === '' || $totalBytes < 1 || $chunkBytes < 1024) {
+                throw new \RuntimeException('finalize_missing_chunks');
+            }
+
+            /* -------------------- CLIENT SANITY -------------------- */
+            if (isset($data['filename'])) {
+                $clientName = $this->sanitizeFilename((string) $data['filename']);
+                if ($clientName !== $filename) {
                     return response()->json([
-                        'error'  => 'upload_failed',
-                        'reason' => 'contract_mismatch',
-                        'field'  => 'filename',
-                        'expected' => $declaredName,
-                        'got'      => $reqFilename,
+                        'error'    => 'upload_failed',
+                        'reason'   => 'contract_mismatch',
+                        'field'    => 'filename',
+                        'expected' => $filename,
+                        'got'      => $clientName,
                     ], 409);
                 }
             }
 
             if (isset($data['total_bytes'])) {
-                $reqTotal = (int) $data['total_bytes'];
-                if ($reqTotal !== $declaredTotal) {
+                $clientTotal = (int) $data['total_bytes'];
+                if ($clientTotal !== $totalBytes) {
                     return response()->json([
-                        'error'  => 'upload_failed',
-                        'reason' => 'contract_mismatch',
-                        'field'  => 'total_bytes',
-                        'expected' => $declaredTotal,
-                        'got'      => $reqTotal,
+                        'error'    => 'upload_failed',
+                        'reason'   => 'contract_mismatch',
+                        'field'    => 'total_bytes',
+                        'expected' => $totalBytes,
+                        'got'      => $clientTotal,
                     ], 409);
                 }
             }
 
-            $filename = $declaredName;
-            $totalBytes = $declaredTotal;
+            /* -------------------- DUPLICATE FINALIZE GUARD -------------------- */
+            // Policy: finalize is one-shot. If any committed artifact exists, reject duplicates.
+            $finalDir      = storage_path("app/final/uploads/{$uploadId}");
+            $quarantineDir = storage_path("app/quarantine/uploads/{$uploadId}");
 
-            $expectedChunks = (int) ceil($declaredTotal / $chunkBytes);
+            $finalPath      = "{$finalDir}/{$filename}";
+            $finalTmp       = "{$finalPath}.tmp";
+            $quarantinePath = "{$quarantineDir}/{$filename}";
+            $quarantineTmp  = "{$quarantinePath}.tmp";
 
-            // Pre-check chunk completeness (actionable)
-            $missing = [];
-            for ($i = 0; $i < $expectedChunks; $i++) {
-                if (!File::exists("{$chunksDir}/{$i}.part")) {
-                    $missing[] = $i;
-                }
-            }
-
-            if (!empty($missing)) {
+            if (
+                File::exists($finalPath) || File::exists($finalTmp) ||
+                File::exists($quarantinePath) || File::exists($quarantineTmp)
+            ) {
+                // Best-effort event
                 $this->safeEmit('upload.failed', $uploadId, 'api', [
                     'stage'  => 'finalize',
-                    'reason' => 'finalize_missing_chunks',
-                    'missing_count' => count($missing),
-                    'missing_sample' => array_slice($missing, 0, 50),
+                    'reason' => 'finalize_locked',
+                    'detail' => 'duplicate_finalize',
                 ]);
 
                 return response()->json([
                     'error'  => 'upload_failed',
-                    'reason' => 'finalize_missing_chunks',
-                    'expected_chunks' => $expectedChunks,
-                    'missing_count'   => count($missing),
-                    'missing'         => array_slice($missing, 0, 200),
+                    'reason' => 'finalize_locked',
+                    'detail' => 'duplicate_finalize',
                 ], 409);
             }
 
-            // Assemble into TEMP (deterministic: 0..expectedChunks-1 only)
-            $tempDir = storage_path("app/tmp/{$uploadId}");
+            /* -------------------- CHUNK COMPLETENESS -------------------- */
+            $expectedChunks = (int) ceil($totalBytes / $chunkBytes);
+
+            for ($i = 0; $i < $expectedChunks; $i++) {
+                if (!File::exists("{$chunksDir}/{$i}.part")) {
+                    throw new \RuntimeException('finalize_missing_chunks');
+                }
+            }
+
+            /* -------------------- ASSEMBLE -------------------- */
+            $tempDir   = storage_path("app/tmp/{$uploadId}");
+            $assembled = "{$tempDir}/assembled.bin";
             File::ensureDirectoryExists($tempDir);
 
-            $tempAssembledPath = "{$tempDir}/assembled.bin";
-            $out = fopen($tempAssembledPath, 'wb');
+            $out = fopen($assembled, 'wb');
             if ($out === false) {
                 throw new \RuntimeException('finalize_internal_error');
             }
 
             $written = 0;
 
-            for ($i = 0; $i < $expectedChunks; $i++) {
-                $chunkPath = "{$chunksDir}/{$i}.part";
-
-                $in = fopen($chunkPath, 'rb');
-                if ($in === false) {
-                    fclose($out);
-                    throw new \RuntimeException('finalize_internal_error');
-                }
-
-                while (!feof($in)) {
-                    $buf = fread($in, 8192);
-                    if ($buf === false) {
-                        fclose($in);
-                        fclose($out);
+            try {
+                for ($i = 0; $i < $expectedChunks; $i++) {
+                    $in = fopen("{$chunksDir}/{$i}.part", 'rb');
+                    if ($in === false) {
                         throw new \RuntimeException('finalize_internal_error');
                     }
 
-                    $w = fwrite($out, $buf);
-                    if ($w === false) {
+                    try {
+                        while (!feof($in)) {
+                            $buf = fread($in, 8192);
+                            if ($buf === false) {
+                                throw new \RuntimeException('finalize_internal_error');
+                            }
+                            if ($buf === '') {
+                                continue;
+                            }
+
+                            $w = fwrite($out, $buf);
+                            if ($w === false) {
+                                throw new \RuntimeException('finalize_internal_error');
+                            }
+
+                            $written += strlen($buf);
+                        }
+                    } finally {
                         fclose($in);
-                        fclose($out);
-                        throw new \RuntimeException('finalize_internal_error');
                     }
-
-                    $written += strlen($buf);
                 }
-
-                fclose($in);
+            } finally {
+                fclose($out);
             }
-
-            fclose($out);
 
             if ($written !== $totalBytes) {
-                throw new \RuntimeException('integrity_mismatch');
+                throw new \RuntimeException('finalize_size_mismatch');
             }
 
-            // Scan (degraded allowed; must not block finalize)
+            /* -------------------- SCAN (degraded allowed) -------------------- */
             $scanStatus = 'pending_scan';
-            $signature  = null;
-
-            $this->safeEmit('upload.scan.started', $uploadId, 'api', ['engine' => 'clamav']);
 
             try {
-                $hash = hash_file('sha256', $tempAssembledPath);
+                $this->safeEmit('upload.scan.started', $uploadId, 'api', ['engine' => 'clamav']);
 
-                $stream = fopen($tempAssembledPath, 'rb');
+                $stream = fopen($assembled, 'rb');
                 if ($stream === false) {
-                    throw new \RuntimeException('finalize_internal_error');
+                    throw new \RuntimeException('scan_protocol_error');
                 }
 
                 try {
-                    $scannerResponse = Http::timeout(config('scanner.timeout'))
+                    $resp = Http::timeout(config('scanner.timeout'))
                         ->withHeaders(['Content-Type' => 'application/octet-stream'])
                         ->send('POST', rtrim(config('scanner.base_url'), '/') . '/scan', [
                             'body' => $stream,
@@ -202,100 +270,63 @@ class UploadFinalizeController extends Controller
                     fclose($stream);
                 }
 
-                if (!$scannerResponse->ok()) {
+                if (!$resp->ok()) {
                     throw new \RuntimeException('scan_protocol_error');
                 }
 
-                $body = $scannerResponse->json();
+                $body = $resp->json();
                 if (!is_array($body) || !isset($body['status'])) {
                     throw new \RuntimeException('scan_protocol_error');
                 }
 
-                if (($body['status'] ?? null) === 'infected') {
-                    $signature = $body['signature'] ?? null;
-
-                    Log::channel('infected')->warning('infected_upload', [
-                        'upload_id' => $uploadId,
-                        'filename'  => $filename,
-                        'bytes'     => $written,
-                        'sha256'    => $hash,
-                        'signature' => $signature,
-                        'ip'        => $request->ip(),
-                    ]);
-
+                if (($body['status'] ?? null) === 'clean') {
+                    $scanStatus = 'clean';
+                    $this->safeEmit('upload.scan.completed', $uploadId, 'api', ['verdict' => 'clean']);
+                } elseif (($body['status'] ?? null) === 'infected') {
+                    $scanStatus = 'infected';
                     $this->safeEmit('upload.scan.completed', $uploadId, 'api', [
                         'verdict'   => 'infected',
-                        'signature' => $signature,
+                        'signature' => $body['signature'] ?? null,
                     ]);
-
-                    $scanStatus = 'infected';
-                } elseif (($body['status'] ?? null) === 'clean') {
-                    $this->safeEmit('upload.scan.completed', $uploadId, 'api', [
-                        'verdict' => 'clean',
-                    ]);
-
-                    $scanStatus = 'clean';
                 } else {
                     throw new \RuntimeException('scan_protocol_error');
                 }
             } catch (\Throwable $e) {
-                $scanReason = $this->mapScanFailureReason($e);
-
-                Log::warning('scanner_degraded', [
-                    'upload_id' => $uploadId,
-                    'error'     => $e->getMessage(),
-                    'mapped'    => $scanReason,
-                ]);
-
-                $this->safeEmit('upload.scan.failed', $uploadId, 'api', [
-                    'reason' => $scanReason,
-                ]);
-
+                // scanner degraded: finalize must still commit to quarantine deterministically
+                $this->safeEmit('upload.scan.failed', $uploadId, 'api', ['reason' => 'scanner_unavailable']);
                 $scanStatus = 'pending_scan';
             }
 
-            // Commit result: only CLEAN is published; everything else quarantined
-            $finalPath = null;
-
+            /* -------------------- COMMIT -------------------- */
             if ($scanStatus === 'clean') {
-                $finalDir = storage_path("app/final/uploads/{$uploadId}");
                 File::ensureDirectoryExists($finalDir);
 
-                $finalPath = "{$finalDir}/{$filename}";
-                $tmpFinalPath = $finalPath . '.tmp';
-
-                if (!File::copy($tempAssembledPath, $tmpFinalPath)) {
-                    throw new \RuntimeException('final_write_failed');
+                if (!File::copy($assembled, $finalTmp)) {
+                    throw new \RuntimeException('finalize_internal_error');
                 }
-
-                if (!@rename($tmpFinalPath, $finalPath)) {
+                if (!@rename($finalTmp, $finalPath)) {
                     try {
-                        File::delete($tmpFinalPath);
+                        File::delete($finalTmp);
                     } catch (\Throwable $e) {
                     }
-                    throw new \RuntimeException('final_write_failed');
+                    throw new \RuntimeException('finalize_internal_error');
                 }
             } else {
-                $quarantineDir = storage_path("app/quarantine/uploads/{$uploadId}");
                 File::ensureDirectoryExists($quarantineDir);
 
-                $quarantinePath = "{$quarantineDir}/{$filename}";
-                $tmpQuarantinePath = $quarantinePath . '.tmp';
-
-                if (!File::copy($tempAssembledPath, $tmpQuarantinePath)) {
-                    throw new \RuntimeException('final_write_failed');
+                if (!File::copy($assembled, $quarantineTmp)) {
+                    throw new \RuntimeException('finalize_internal_error');
                 }
-
-                if (!@rename($tmpQuarantinePath, $quarantinePath)) {
+                if (!@rename($quarantineTmp, $quarantinePath)) {
                     try {
-                        File::delete($tmpQuarantinePath);
+                        File::delete($quarantineTmp);
                     } catch (\Throwable $e) {
                     }
-                    throw new \RuntimeException('final_write_failed');
+                    throw new \RuntimeException('finalize_internal_error');
                 }
             }
 
-            // Cleanup temp
+            /* -------------------- CLEANUP -------------------- */
             try {
                 File::deleteDirectory($tempDir);
             } catch (\Throwable $e) {
@@ -305,29 +336,26 @@ class UploadFinalizeController extends Controller
                 ]);
             }
 
-            $durationMs = (int) ((microtime(true) - $startedAt) * 1000);
-
             $this->safeEmit('upload.finalized', $uploadId, 'api', [
                 'bytes'       => $written,
-                'duration_ms' => $durationMs,
                 'status'      => $scanStatus,
+                'duration_ms' => (int) ((microtime(true) - $startedAt) * 1000),
             ]);
 
             return response()->json([
                 'finalized' => true,
-                'bytes'     => $written,
                 'status'    => $scanStatus,
-                'path'      => $finalPath, // null for pending_scan / infected
+                'bytes'     => $written,
+                'path'      => ($scanStatus === 'clean') ? $finalPath : null,
             ]);
         } catch (\Throwable $e) {
-            Log::error('FINALIZE_EXCEPTION', [
-                'upload_id' => $uploadId ?? null,
-                'class'     => get_class($e),
-                'message'   => $e->getMessage(),
-            ]);
-
             $reason = $this->mapFailureReason($e);
 
+            $http = in_array($reason, ['finalize_in_progress', 'finalize_locked'], true)
+                ? 409
+                : Response::HTTP_BAD_REQUEST;
+
+            // Emit failure best-effort (do not throw)
             $this->safeEmit('upload.failed', $uploadId ?? 'unknown', 'api', [
                 'stage'  => 'finalize',
                 'reason' => $reason,
@@ -336,7 +364,7 @@ class UploadFinalizeController extends Controller
             return response()->json([
                 'error'  => 'upload_failed',
                 'reason' => $reason,
-            ], Response::HTTP_BAD_REQUEST);
+            ], $http);
         } finally {
             if (is_resource($lockHandle)) {
                 flock($lockHandle, LOCK_UN);
@@ -345,22 +373,9 @@ class UploadFinalizeController extends Controller
         }
     }
 
-    private function safeEmit(string $event, string $uploadId, string $source, array $payload = []): void
+    private function sanitizeFilename(string $name): string
     {
-        try {
-            UploadEventEmitter::emit($event, $uploadId, $source, $payload);
-        } catch (\Throwable $e) {
-            Log::warning('event_emit_failed', [
-                'event'     => $event,
-                'upload_id' => $uploadId,
-                'error'     => $e->getMessage(),
-            ]);
-        }
-    }
-
-    private function sanitizeFilename(string $filename): string
-    {
-        $clean = basename($filename);
+        $clean = basename($name);
 
         if ($clean === '' || $clean === '.' || $clean === '..') {
             throw new \RuntimeException('invalid_filename');
@@ -373,57 +388,29 @@ class UploadFinalizeController extends Controller
         return $clean;
     }
 
-    private function mapScanFailureReason(\Throwable $e): string
-    {
-        $msg = strtolower((string) $e->getMessage());
-
-        if ($msg === 'scan_protocol_error') {
-            return 'scan_protocol_error';
-        }
-
-        // Heuristic: timeouts
-        if ($msg === 'scan_timeout' || str_contains($msg, 'timeout') || str_contains($msg, 'timed out')) {
-            return 'scan_timeout';
-        }
-
-        // Common connectivity cases
-        if (
-            str_contains($msg, 'curl error') ||
-            str_contains($msg, 'could not resolve host') ||
-            str_contains($msg, 'connection refused')
-        ) {
-            return 'scanner_unavailable';
-        }
-
-        return 'scanner_unavailable';
-    }
-
     private function mapFailureReason(\Throwable $e): string
     {
         $msg = strtolower((string) $e->getMessage());
 
-        // Scanner failures should NOT leak into finalize failures, but if they do:
-        if ($msg === 'scan_protocol_error') {
-            return 'finalize_internal_error';
-        }
-
-        if ($msg === 'scan_timeout') {
-            return 'finalize_internal_error';
-        }
-
         return match ($msg) {
             'finalize_in_progress'    => 'finalize_in_progress',
-
-            'finalize_lock_failed',
-            'final_write_failed'      => 'finalize_locked',
-
-            'finalize_missing_chunks',
-            'orphan_upload'           => 'finalize_missing_chunks',
-
-            'finalize_size_mismatch',
-            'integrity_mismatch'      => 'finalize_size_mismatch',
-
+            'finalize_locked'         => 'finalize_locked',
+            'finalize_missing_chunks' => 'finalize_missing_chunks',
+            'finalize_size_mismatch'  => 'finalize_size_mismatch',
             default                   => 'finalize_internal_error',
         };
+    }
+
+    private function safeEmit(string $event, string $uploadId, string $source, array $payload): void
+    {
+        try {
+            UploadEventEmitter::emit($event, $uploadId, $source, $payload);
+        } catch (\Throwable $e) {
+            Log::warning('event_emit_failed', [
+                'event'     => $event,
+                'upload_id' => $uploadId,
+                'error'     => $e->getMessage(),
+            ]);
+        }
     }
 }
