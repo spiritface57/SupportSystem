@@ -54,6 +54,8 @@ RabbitMQ is **provisioned only** (reserved for Post 11+ integration).
 
 Diagram source: `docs/posts/post9/diagrams/01-infra-baseline.mmd`
 
+Runtime/deployment view: `docs/posts/post9/diagrams/02-runtime-deployment.mmd`
+
 Key ports:
 - Web: 8000
 - MySQL: 3306

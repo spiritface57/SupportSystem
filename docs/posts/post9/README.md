@@ -7,7 +7,8 @@ Scope:
 - Local filesystem storage (pre-MinIO)
 - Docker Compose topology and env defaults
 - Smoke checks for basic connectivity
-- Smoke script: `scripts/local-tools/post9-smoke-run.sh`
+ - Smoke script: `scripts/local-tools/post9-smoke-run.sh`
+ - Diagrams: baseline + runtime/deployment
 
 Notes:
 - Redis is active for cache/session/queue in this baseline.
