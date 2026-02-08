@@ -52,6 +52,7 @@ Thumbs.db
 files/
 
 review_bundle_20251229_205745/
+/.worktrees/
 scripts/services/api/file-upload-scan/files/
 services/api/docs/posts/post8/metrics-output.md
 /repo.sh

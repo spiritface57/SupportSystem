@@ -191,3 +191,9 @@ Notes
 - Implement infected files as terminal finalize state
 - Enforced event contract alignment with v0.4 guarantees
 - Hardened finalize determinism
+
+## post9-v0.1.0
+- Added MySQL, Redis, and RabbitMQ services to docker-compose baseline
+- Documented infrastructure baseline and smoke checks
+- Added Post 9 diagram and documentation
+- Updated roadmap and project position for infra baseline work

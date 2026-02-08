@@ -3,7 +3,7 @@
 
 Version: v0.1  
 Status: Active  
-Last Updated: 2026-01-03
+Last Updated: 2026-02-08
 
 ---
 
@@ -108,7 +108,7 @@ not standalone content.
 **Status:** Planned  
 **Implementation:** Infrastructure Baseline (DB, Cache, Queue, Storage)  
 **Repo Tag:** post9-v0.1.0 (planned)  
-**Documentation:** docs/posts/post-09-infra-baseline.md (planned)
+**Documentation:** docs/posts/post9/post-09-infra-baseline.md
 
 ---
 

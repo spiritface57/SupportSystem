@@ -3,7 +3,7 @@
 
 Version: v0.1  
 Status: Active  
-Last Updated: 2026-01-03  
+Last Updated: 2026-02-08  
 Based on: Project Context v1.0
 
 ---
@@ -71,13 +71,13 @@ They do not define architectural constraints.
 
 - Documentation of Post 8
 - Repository structure hardening
-- Infrastructure baseline planning
+- Infrastructure baseline (DB/Redis/RabbitMQ/Storage)
+- Post 9 documentation and compose baseline
 
 ---
 
 ## 5. Not Started
 
-- Infrastructure baseline (DB, cache, queue, object storage)
 - Event bus + outbox pattern
 - Worker services
 - Read models & query layer
