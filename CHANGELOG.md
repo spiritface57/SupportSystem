@@ -197,3 +197,9 @@ Notes
 - Documented infrastructure baseline and smoke checks
 - Added Post 9 diagram and documentation
 - Updated roadmap and project position for infra baseline work
+
+## post10-v0.1.0 (wip)
+- Added MinIO service with bucket init, versioning, and lifecycle hooks
+- Added S3-backed final/quarantine storage with new env defaults
+- Finalize/rescan flows now write/read via storage disks
+- Added Post 10 storage-separation docs and diagram
