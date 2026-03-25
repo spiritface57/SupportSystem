@@ -27,6 +27,7 @@ services:
       - mysql
       - redis
       - rabbitmq
+      - minio
       - scanner
 
   web:
@@ -86,6 +87,39 @@ services:
       timeout: 5s
       retries: 10
 
+  minio:
+    image: minio/minio:latest
+    command: server --console-address ":9001" /data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: support
+      MINIO_ROOT_PASSWORD: support123
+    volumes:
+      - minio_data:/data
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      - minio
+    environment:
+      MINIO_ROOT_USER: support
+      MINIO_ROOT_PASSWORD: support123
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        until mc alias set local http://minio:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}"; do
+          sleep 1
+        done
+        mc mb --ignore-existing local/final
+        mc mb --ignore-existing local/quarantine
+        mc version enable local/final || true
+        mc version enable local/quarantine || true
+        mc ilm add --noncurrent-expire-days 30 local/final || true
+        mc ilm add --noncurrent-expire-days 30 local/quarantine || true
+
   scanner:
     build: ./services/scanner-node
     ports:
@@ -95,3 +129,4 @@ volumes:
   mysql_data:
   redis_data:
   rabbitmq_data:
+  minio_data:
