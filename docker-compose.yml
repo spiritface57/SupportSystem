@@ -98,6 +98,12 @@ services:
       MINIO_ROOT_PASSWORD: support123
     volumes:
       - minio_data:/data
+    
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/ready"]
+      interval: 5s
+      timeout: 5s
+      retries: 12  
 
   minio-init:
     image: minio/mc:latest
