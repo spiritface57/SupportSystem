@@ -3,7 +3,7 @@
 
 Version: v0.1  
 Status: Active  
-Last Updated: 2026-02-08
+Last Updated: 2026-02-12
 
 ---
 
@@ -109,6 +109,16 @@ not standalone content.
 **Implementation:** Infrastructure Baseline (DB, Cache, Queue, Storage)  
 **Repo Tag:** post9-v0.1.0 (planned)  
 **Documentation:** docs/posts/post9/post-09-infra-baseline.md
+
+---
+
+### Post 10
+**Title:** Storage Separation With MinIO  
+**Type:** Infrastructure  
+**Status:** Planned  
+**Implementation:** Object storage separation + lifecycle policy  
+**Repo Tag:** N/A  
+**Documentation:** docs/posts/post10/post-10-storage-separation.md
 
 ---
 

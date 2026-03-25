@@ -1,0 +1,15 @@
+flowchart LR
+  Client[Client Browser]
+  Web[Nginx]
+  PHP[PHP-FPM / Laravel]
+  LocalChunks[Local FS (chunks/temp)]
+  Final[(MinIO: final bucket)]
+  Quarantine[(MinIO: quarantine bucket)]
+  Scanner[Scanner Service]
+
+  Client --> Web --> PHP
+  PHP --> LocalChunks
+  PHP --> Scanner
+  Scanner --> PHP
+  PHP --> Final
+  PHP --> Quarantine
