@@ -116,9 +116,10 @@ not standalone content.
 **Title:** Storage Separation With MinIO  
 **Type:** Infrastructure  
 **Status:** Planned  
-**Implementation:** Object storage separation + lifecycle policy  
+**Implementation:** Storage responsibility separation with MinIO-backed final/quarantine domains 
 **Repo Tag:** N/A  
 **Documentation:** docs/posts/post10/post-10-storage-separation.md
+**Notes:** Durable storage separated from local transient assembly; versioning and lifecycle made explicit
 
 ---
 

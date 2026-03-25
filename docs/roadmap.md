@@ -26,8 +26,9 @@ Last Updated: 2026-02-12
 - Docker Compose baseline + env defaults
 
 ### Post 10
-- Storage separation (MinIO)
-- Lifecycle policies
+- Storage responsibility separation
+- MinIO-backed final/quarantine domains
+- Versioning and lifecycle policy for durable artifacts
 
 ---
 
