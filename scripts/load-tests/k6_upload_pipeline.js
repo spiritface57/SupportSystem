@@ -89,12 +89,27 @@ function doFinalize(uploadId, filename) {
     filename,
     total_bytes: fileSize,
   });
+
   const res = http.post(`${API_BASE}/finalize`, payload, jsonHeaders());
+
+  let body = {};
+  try {
+    body = res.json();
+  } catch (_) {}
+
   const ok = check(res, {
     "finalize status 200/201": (r) => r.status === 200 || r.status === 201,
+    "finalize response has finalized=true": () => body.finalized === true,
+    "finalize response has status": () =>
+      typeof body.status === "string" && body.status.length > 0,
+    "clean finalize returns final s3 path": () =>
+      body.status !== "clean" ||
+      (typeof body.path === "string" && body.path.startsWith("s3://final/")),
   });
+
   if (!ok) errorRate.add(1);
   t_finalize.add(res.timings.duration);
+
   return ok;
 }
 
