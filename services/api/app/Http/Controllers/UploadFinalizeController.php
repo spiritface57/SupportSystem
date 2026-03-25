@@ -3,10 +3,12 @@
 namespace App\Http\Controllers;
 
 use App\Support\UploadEventEmitter;
+use App\Support\UploadStorage;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Storage;
 use Symfony\Component\HttpFoundation\Response;
 
 class UploadFinalizeController extends Controller
@@ -178,17 +180,21 @@ class UploadFinalizeController extends Controller
 
             /* -------------------- DUPLICATE FINALIZE GUARD -------------------- */
             // Policy: finalize is one-shot. If any committed artifact exists, reject duplicates.
-            $finalDir      = storage_path("app/final/uploads/{$uploadId}");
-            $quarantineDir = storage_path("app/quarantine/uploads/{$uploadId}");
+            $finalDisk      = UploadStorage::finalDisk();
+            $quarantineDisk = UploadStorage::quarantineDisk();
 
-            $finalPath      = "{$finalDir}/{$filename}";
-            $finalTmp       = "{$finalPath}.tmp";
-            $quarantinePath = "{$quarantineDir}/{$filename}";
-            $quarantineTmp  = "{$quarantinePath}.tmp";
+            $finalKey      = UploadStorage::finalKey($uploadId, $filename);
+            $quarantineKey = UploadStorage::quarantineKey($uploadId, $filename);
+
+            $finalTmpKey      = $finalKey . '.tmp';
+            $quarantineTmpKey = $quarantineKey . '.tmp';
+
+            $finalFs      = Storage::disk($finalDisk);
+            $quarantineFs = Storage::disk($quarantineDisk);
 
             if (
-                File::exists($finalPath) || File::exists($finalTmp) ||
-                File::exists($quarantinePath) || File::exists($quarantineTmp)
+                $finalFs->exists($finalKey) || $finalFs->exists($finalTmpKey) ||
+                $quarantineFs->exists($quarantineKey) || $quarantineFs->exists($quarantineTmpKey)
             ) {
                 // Best-effort event
                 $this->safeEmit('upload.failed', $uploadId, 'api', [
@@ -311,31 +317,9 @@ class UploadFinalizeController extends Controller
 
             /* -------------------- COMMIT -------------------- */
             if ($scanStatus === 'clean') {
-                File::ensureDirectoryExists($finalDir);
-
-                if (!File::copy($assembled, $finalTmp)) {
-                    throw new \RuntimeException('finalize_internal_error');
-                }
-                if (!@rename($finalTmp, $finalPath)) {
-                    try {
-                        File::delete($finalTmp);
-                    } catch (\Throwable $e) {
-                    }
-                    throw new \RuntimeException('finalize_internal_error');
-                }
+                $this->storeObject($finalDisk, $finalKey, $assembled);
             } else {
-                File::ensureDirectoryExists($quarantineDir);
-
-                if (!File::copy($assembled, $quarantineTmp)) {
-                    throw new \RuntimeException('finalize_internal_error');
-                }
-                if (!@rename($quarantineTmp, $quarantinePath)) {
-                    try {
-                        File::delete($quarantineTmp);
-                    } catch (\Throwable $e) {
-                    }
-                    throw new \RuntimeException('finalize_internal_error');
-                }
+                $this->storeObject($quarantineDisk, $quarantineKey, $assembled);
             }
 
             /* -------------------- CLEANUP -------------------- */
@@ -352,13 +336,15 @@ class UploadFinalizeController extends Controller
                 'bytes'       => $written,
                 'status'      => $scanStatus,
                 'duration_ms' => (int) ((microtime(true) - $startedAt) * 1000),
+                'storage_disk' => ($scanStatus === 'clean') ? $finalDisk : $quarantineDisk,
+                'storage_key'  => ($scanStatus === 'clean') ? $finalKey : $quarantineKey,
             ]);
 
             return response()->json([
                 'finalized' => true,
                 'status'    => $scanStatus,
                 'bytes'     => $written,
-                'path'      => ($scanStatus === 'clean') ? $finalPath : null,
+                'path'      => ($scanStatus === 'clean') ? UploadStorage::formatPath($finalDisk, $finalKey) : null,
             ]);
         } catch (\Throwable $e) {
             $reason = $this->mapFailureReason($e);
@@ -423,6 +409,46 @@ class UploadFinalizeController extends Controller
                 'upload_id' => $uploadId,
                 'error'     => $e->getMessage(),
             ]);
+        }
+    }
+
+    private function storeObject(string $disk, string $key, string $sourcePath): void
+    {
+        $fs = Storage::disk($disk);
+        $driver = (string) config("filesystems.disks.{$disk}.driver");
+
+        $dir = trim(dirname($key), '/');
+        if ($dir !== '' && $dir !== '.') {
+            $fs->makeDirectory($dir);
+        }
+
+        $stream = fopen($sourcePath, 'rb');
+        if ($stream === false) {
+            throw new \RuntimeException('finalize_internal_error');
+        }
+
+        try {
+            if ($driver === 'local') {
+                $tmpKey = $key . '.tmp';
+                if (!$fs->writeStream($tmpKey, $stream)) {
+                    throw new \RuntimeException('finalize_internal_error');
+                }
+                if (!$fs->move($tmpKey, $key)) {
+                    try {
+                        $fs->delete($tmpKey);
+                    } catch (\Throwable $e) {
+                    }
+                    throw new \RuntimeException('finalize_internal_error');
+                }
+            } else {
+                if (!$fs->writeStream($key, $stream)) {
+                    throw new \RuntimeException('finalize_internal_error');
+                }
+            }
+        } finally {
+            if (is_resource($stream)) {
+                fclose($stream);
+            }
         }
     }
 }
