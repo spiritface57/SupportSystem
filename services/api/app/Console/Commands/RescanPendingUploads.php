@@ -97,10 +97,14 @@ class RescanPendingUploads extends Command
                     ->exists();
 
                 if ($alreadyPublished) {
-                    // reconcile filesystem marker to prevent future reprocessing
+                    // reconcile storage marker to prevent future reprocessing
                     try {
-                        File::put($marker, now()->toISOString());
+                        Storage::disk($quarantineDisk)->put($marker, now()->toISOString());
                     } catch (\Throwable $e) {
+                        Log::warning('rescan_marker_reconcile_failed', [
+                            'upload_id' => $uploadId,
+                            'error'     => $e->getMessage(),
+                        ]);
                     }
                     continue;
                 }
