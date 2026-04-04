@@ -325,6 +325,7 @@ class UploadFinalizeController extends Controller
             /* -------------------- CLEANUP -------------------- */
             try {
                 File::deleteDirectory($tempDir);
+                File::deleteDirectory($chunksDir);
             } catch (\Throwable $e) {
                 Log::warning('finalize_cleanup_failed', [
                     'upload_id' => $uploadId,
