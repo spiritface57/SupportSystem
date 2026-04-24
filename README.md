@@ -1,99 +1,210 @@
-# Production-Grade On-Prem File Upload and Scanning Architecture
+# Post 9 — Infrastructure as a Contract
 
-This repository contains a constraint-driven, on-prem system for handling large file ingestion,
-validation, and malware scanning under strict resource and failure boundaries.
+## On-Prem Support Platform
 
-The project is designed as a multi-service, multi-language architecture and is implemented
-incrementally, with each version documenting explicit behavioral guarantees.
+This branch introduces the first runnable infrastructure baseline for the upload pipeline.
 
----
+Post 8 proved that the upload finalization logic could behave deterministically under scanner failure.
 
-## Scope of This Repository
+Post 9 moves the system from logical correctness to runtime reality.
 
-This is a **system-level repository**.
+The goal of this branch is simple:
 
-It defines:
-- Overall architecture and operational constraints
-- Service boundaries and responsibilities
-- Versioned system behavior and guarantees
-
-It treats services as replaceable components behind stable contracts.
-
-It does **not** document internal implementation details of individual services.
-Each service maintains its own README.
+> If the infrastructure is not real, the guarantees are not real.
 
 ---
 
-## Core Constraints
+## Core Claim
 
-The system is designed under the following non-negotiable constraints:
+Infrastructure is part of the system contract.
 
-- Fully on-prem deployment
-- No external cloud dependencies
-- No shared filesystem between services
-- Bounded memory usage for large files
-- Malware scanning must not block ingestion
-- Partial failures must not cascade
+A system cannot claim reliability, latency behavior, retry safety, or operational predictability if it is only tested against mocks or placeholders.
 
-All architectural and implementation decisions are derived from these constraints.
+This branch replaces assumptions with real runtime dependencies.
 
 ---
 
-## High-Level Architecture
+## What This Branch Adds
 
-The system is composed of multiple isolated, language-agnostic services:
+Post 9 introduces a Docker-based infrastructure baseline with real services:
 
-- **API Service (Laravel)**
-  - Upload initialization and coordination
-  - Chunked file ingestion
-  - Finalization and integrity validation
+- MySQL 8.0
+- Redis 7
+- RabbitMQ 3.12
+- Local filesystem storage
+- Nginx + PHP-FPM runtime
+- Scanner service
+- Health checks
+- k6 load testing
 
-- **Scanning Service (Node.js + ClamAV)**
-  - Streaming malware scanning
-  - Time-bounded execution
-  - Failure containment and isolation
+RabbitMQ is introduced in the baseline, but it is not yet used as a source of delivery guarantees.
 
-- **Worker Services (Go)**
-  - Asynchronous and background processing
-  - Isolated execution and resource boundaries
-
-- **Supporting Components**
-  - Temporary storage and deterministic cleanup
-  - Infrastructure and orchestration assets
-  - Operational, chaos, and load-testing scripts
-
-See service-level READMEs for service-specific implementation details.
+That belongs to later posts.
 
 ---
 
-## Repository Structure
+## Why This Matters
 
-```text
+Post 8 focused on deterministic file finalization.
+
+But correctness in code is not enough.
+
+Once the system runs under real conditions, new questions appear:
+
+- Does the API behave under concurrent traffic?
+- Does PHP-FPM handle real overlapping requests?
+- Do Redis-backed components work correctly?
+- Are infrastructure dependencies observable?
+- Can load tests complete full upload cycles?
+- Can failures be reproduced instead of guessed?
+
+Mocks cannot answer these questions.
+
+Real infrastructure can.
+
+---
+
+## System Components
+
+### API Service
+
+Laravel API responsible for:
+
+- upload initialization
+- chunk ingestion
+- finalization
+- scanner interaction
+- event emission
+- failure handling
+
+### Web Service
+
+Nginx frontend for the API runtime.
+
+Used to exercise the API through a more realistic request path instead of relying on the development server.
+
+### MySQL
+
+Primary persistence layer.
+
+Used for application data and upload events.
+
+### Redis
+
+Used for:
+
+- cache
+- sessions
+- queue configuration
+- coordination support
+
+### RabbitMQ
+
+Provisioned as part of the infrastructure baseline.
+
+At this stage, RabbitMQ exists as a real dependency, but message delivery semantics are not yet part of the system contract.
+
+### Scanner Service
+
+Node-based scanner service used by the upload pipeline.
+
+Scanner failure must not block finalization.
+
+### Local Filesystem
+
+Used as the storage layer in this phase.
+
+Object storage separation is introduced later in Post 10.
+
+---
+
+## Main Guarantees
+
+This branch validates that the system can run with real infrastructure dependencies.
+
+It does not claim production-grade availability.
+
+It does guarantee that:
+
+- the stack is runnable through Docker Compose
+- infrastructure services are real, not mocked
+- upload pipeline behavior can be measured
+- health checks exist for core dependencies
+- load tests can exercise the pipeline under concurrent traffic
+- runtime behavior is observable enough to support later architectural decisions
+
+---
+
+## Validation
+
+Validation for Post 9 focuses on runtime behavior.
+
+### Smoke Validation
+
+The stack should start successfully with:
+
+```bash
+docker compose up -d --build
+
+## Load Validation
+
+k6 is used to exercise the upload pipeline under staged traffic.
+
+Example Stages:
+
+- 20 virtual users
+- 40 virtual users
+- 30-second runtime windows
+
+## Goal
+
+The goal is not to claim internet-scale performance.
+
+The goal is to prove that the pipeline can run end-to-end under real local infrastructure conditions.
+
+## What This Branch Does Not Claim
+
+This branch does not claim:
+
+- high availability
+- multi-node durability
+- production security hardening
+- distributed guarantees
+- RabbitMQ-backed delivery guarantees
+- object-storage lifecycle management
+
+These are intentionally deferred.
+
+## Summary
+
+Post 9 is about establishing a real runtime baseline.
+
+
 .
 ├── docker
-│   └── (container and orchestration assets)
-│
-├── docs
-│   └── post8
-│       └── (versioned architecture and implementation notes)
-│
-├── scripts
-│   ├── chaos
-│   │   └── (failure and disruption experiments)
-│   ├── load-tests
-│   │   └── (load and stress testing tools)
-│   ├── local-tools
-│   │   └── (local operational utilities)
-│   └── services
-│       └── (service-specific helper scripts)
+│   ├── nginx
+│   │   └── default.conf
+│   └── php-fpm
+│       └── PHP-FPM runtime configuration
 │
 ├── services
 │   ├── api
-│   │   └── (core API service, Laravel)
-│   ├── scanner-node
-│   │   └── (streaming malware scanner, Node.js + ClamAV)
-│   └── worker-go
-│       └── (background worker service, Go)
+│   │   └── Laravel API service
+│   └── scanner-node
+│       └── Scanner service
 │
+├── scripts
+│   ├── load-tests
+│   │   └── k6 load tests
+│   └── services
+│       └── API upload test helpers
+│
+├── docs
+│   ├── posts
+│   │   └── post9
+│   │       └── infrastructure baseline documentation
+│   └── diagrams
+│
+├── docker-compose.yml
 ├── CHANGELOG.md
 └── README.md
