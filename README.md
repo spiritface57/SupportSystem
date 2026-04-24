@@ -1,99 +1,153 @@
-# Production-Grade On-Prem File Upload and Scanning Architecture
+# SupportSystem — On-Prem File Upload & Scanning Architecture
 
-This repository contains a constraint-driven, on-prem system for handling large file ingestion,
-validation, and malware scanning under strict resource and failure boundaries.
+A constraint-driven backend system for handling large file ingestion, validation,
+and malware scanning under real failure conditions.
 
-The project is designed as a multi-service, multi-language architecture and is implemented
-incrementally, with each version documenting explicit behavioral guarantees.
-
----
-
-## Scope of This Repository
-
-This is a **system-level repository**.
-
-It defines:
-- Overall architecture and operational constraints
-- Service boundaries and responsibilities
-- Versioned system behavior and guarantees
-
-It treats services as replaceable components behind stable contracts.
-
-It does **not** document internal implementation details of individual services.
-Each service maintains its own README.
+This project is built incrementally. Each stage introduces a new architectural
+guarantee and is validated under actual runtime constraints.
 
 ---
 
-## Core Constraints
+## System Evolution
 
-The system is designed under the following non-negotiable constraints:
+This repository is structured as an evolving system, not a single static implementation.
 
-- Fully on-prem deployment
-- No external cloud dependencies
-- No shared filesystem between services
-- Bounded memory usage for large files
-- Malware scanning must not block ingestion
-- Partial failures must not cascade
+- **Post 8 — Deterministic Finalization**
+  - Finalize does NOT depend on scanner availability
+  - Scanner failure degrades state, but never blocks ingestion
 
-All architectural and implementation decisions are derived from these constraints.
+- **Post 9 — Infrastructure as a Contract**
+  - Introduced real runtime dependencies (MySQL, Redis, RabbitMQ)
+  - Validated behavior under actual load (k6)
 
----
-
-## High-Level Architecture
-
-The system is composed of multiple isolated, language-agnostic services:
-
-- **API Service (Laravel)**
-  - Upload initialization and coordination
-  - Chunked file ingestion
-  - Finalization and integrity validation
-
-- **Scanning Service (Node.js + ClamAV)**
-  - Streaming malware scanning
-  - Time-bounded execution
-  - Failure containment and isolation
-
-- **Worker Services (Go)**
-  - Asynchronous and background processing
-  - Isolated execution and resource boundaries
-
-- **Supporting Components**
-  - Temporary storage and deterministic cleanup
-  - Infrastructure and orchestration assets
-  - Operational, chaos, and load-testing scripts
-
-See service-level READMEs for service-specific implementation details.
+- **Post 10 — Storage as a Contract**
+  - Separated storage domains:
+    - final (trusted)
+    - quarantine (untrusted)
+    - transient (local)
+  - Storage enforces system behavior
 
 ---
 
-## Repository Structure
+## Branches
 
-```text
-.
-├── docker
-│   └── (container and orchestration assets)
-│
-├── docs
-│   └── post8
-│       └── (versioned architecture and implementation notes)
-│
-├── scripts
-│   ├── chaos
-│   │   └── (failure and disruption experiments)
-│   ├── load-tests
-│   │   └── (load and stress testing tools)
-│   ├── local-tools
-│   │   └── (local operational utilities)
-│   └── services
-│       └── (service-specific helper scripts)
-│
-├── services
-│   ├── api
-│   │   └── (core API service, Laravel)
-│   ├── scanner-node
-│   │   └── (streaming malware scanner, Node.js + ClamAV)
-│   └── worker-go
-│       └── (background worker service, Go)
-│
-├── CHANGELOG.md
-└── README.md
+Each branch represents a specific architectural milestone:
+
+```
+feature/file-pipeline-hardening      → Post 8
+feature/post9-infra-baseline         → Post 9
+feature/post10-storage-separation    → Post 10
+```
+
+Switch branches to explore each stage:
+
+```bash
+git checkout feature/post10-storage-separation
+```
+
+---
+
+## Architecture Overview
+
+The system is composed of independent services:
+
+- **API (Laravel)**
+  - Upload orchestration
+  - Chunk handling
+  - Finalization logic
+
+- **Scanner (Node.js + ClamAV)**
+  - Streaming malware detection
+  - Failure isolation
+
+- **Worker (Go)**
+  - Background processing (future stages)
+
+- **Infrastructure**
+  - MySQL (persistence)
+  - Redis (cache / queue)
+  - RabbitMQ (future event guarantees)
+  - MinIO (object storage)
+
+---
+
+## Core Principles
+
+This system is designed around strict constraints:
+
+- fully on-prem deployment  
+- no external cloud dependencies  
+- bounded resource usage  
+- failure isolation  
+- deterministic behavior under failure  
+
+---
+
+## Guarantees
+
+Across all stages, the system evolves toward:
+
+- non-blocking upload pipeline  
+- safe handling of untrusted files  
+- deterministic finalization behavior  
+- explicit storage boundaries  
+- measurable runtime behavior  
+
+---
+
+## Getting Started
+
+Start the full system:
+
+```bash
+docker compose up -d --build
+```
+
+Verify services:
+
+```bash
+docker compose ps
+```
+
+Run a sample upload:
+
+```bash
+bash scripts/services/api/file-upload-scan/upload_one_file.sh scripts/services/api/file-upload-scan/files/a.png
+```
+
+---
+
+## Technical Deep Dive
+
+Full architecture, implementation details, and validation scenarios are available in:
+
+```
+docs/posts/
+```
+
+---
+
+## Related Articles
+
+This repository is paired with a LinkedIn series:
+
+- Post 8 — Deterministic Finalization
+- Post 9 — Infrastructure as a Contract
+- Post 10 — Storage as a Contract
+
+---
+
+## Summary
+
+This project is not about building features.
+
+It is about enforcing guarantees.
+
+Each stage removes implicit assumptions and replaces them with
+explicit, testable system behavior.
+
+---
+
+## License
+
+For educational and demonstration purposes.
