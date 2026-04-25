@@ -1,193 +1,147 @@
-# CHANGELOG.md
-Post 08 File Upload and Chunking
-================================
+# Changelog
 
-## v0.1 Baseline Upload Flow no security claims
+All notable changes to this system are documented here.
 
-Scope
-• Laravel API bootstrapped as the upload entry point  
-• upload session initialization endpoint  
-• chunked file upload supported  
-• chunks accepted and written to temporary storage  
-• flow functional but intentionally incomplete
+This project evolves through explicit system guarantees, not just feature additions.
 
-Explicit non goals
-• no malware scanning  
-• no streaming scan  
-• no finalize guarantees  
-• no integrity verification beyond basic byte count acceptance  
-• no auth  
-• no encryption claims  
-• no retry guarantees  
-• no production hardening
+---
 
-Notes
-• this version validates request lifecycle only  
-• behavior is intentionally unsafe  
-• any reliability or security properties are explicitly out of scope
+## [post10-v0.2.1]
 
+### Fixed
+- Rescan published marker now written to quarantine storage (consistent domain enforcement)
+- Transient chunk data cleaned after finalize commit
 
-## v0.2 Finalize and integrity still no scanning
+### Notes
+- Ensures storage domains remain the single source of truth for publish state
+- Prevents stale filesystem artifacts from affecting rescan behavior
 
-Scope
-• finalize endpoint added to complete an upload session  
-• chunks assembled into a single file in order  
-• total file size verified against total_bytes declared at init  
-• basic collision handling for duplicate upload_id or existing output file  
-• finalize returns completed or failed  
-• temporary chunk files cleaned up after finalize
+---
 
-Explicit non goals
-• no malware scanning  
-• no streaming scan  
-• no content validation  
-• no auth  
-• no retry or resume guarantees  
-• no checksum or cryptographic integrity  
-• no concurrency safety across multiple finalize attempts  
-• no production hardening
+## [post10-v0.2.0]
 
-Failure behavior
-• missing chunks cause finalize failure  
-• size mismatch causes finalize failure  
-• partial files may remain on disk after failure  
-• failure does not roll back state
+### Added
+- Validation scenarios for storage-aware pipeline behavior
+- Interpretation boundaries for failure vs domain outcomes
+- k6 load testing documentation for storage-separated pipeline
+- Architecture decision record for storage separation
 
-Notes
-• focus is correctness of file assembly not safety  
-• integrity is byte count only  
-• security properties remain out of scope
+### Changed
+- Finalized storage separation documentation
+- Clarified contract between finalize decision and storage domains
 
+### Notes
+- Focus shifts from infrastructure correctness → behavioral correctness under failure
+- Storage domains are now part of the system contract
 
-## v0.3 Streaming scan Node scanner with ClamAV plus backpressure and timeouts
+---
 
-Scope
-• Node scanner service introduced as a separate process boundary  
-• finalize triggers a streaming scan via scanner service  
-• scanner uses ClamAV INSTREAM protocol  
-• API does not scan files locally  
-• no shared disk between services  
-• scan results are semantic outcomes:
-  • clean  
-  • infected  
-  • error
-• timeouts enforced to prevent hanging finalize  
-• backpressure enforced via scanner concurrency limits:
-  • when capacity exceeded new scan requests are rejected immediately
+## [post10-v0.1.0]
 
-Explicit non goals
-• no advanced threat detection beyond ClamAV signature scanning  
-• no file type validation or magic byte inspection  
-• no cryptographic integrity checks  
-• no exactly once guarantee for scan  
-• no strict idempotency for duplicate finalize  
-• no distributed transactions or rollback  
-• no persistent scan state machine  
-• no production observability stack
+### Added
+- MinIO object storage integration
+- Dedicated storage domains:
+  - `final` (publishable)
+  - `quarantine` (unsafe / deferred)
+- Bucket bootstrap (creation, versioning, lifecycle policy)
+- Storage abstraction layer for finalize and rescan flows
+- Routing based on domain policy instead of local filesystem
 
-Failure behavior
-• scanner unavailable:
-  • finalize fails with reason scanner_unavailable  
-  • file is not promoted to final trusted state
-• scan timeout:
-  • finalize fails with reason scan_timeout  
-  • file is not promoted
-• backpressure triggered:
-  • scanner rejects with reason scanner_busy  
-  • finalize fails fast
-• unexpected scanner response:
-  • finalize fails with explicit reason  
-  • file remains untrusted
-• temporary files may exist locally, but promotion only occurs after clean scan
+### Changed
+- Finalize and rescan flows no longer depend on local disk semantics
+- Data visibility now defined by storage domain, not metadata flags
 
-Notes
-• primary goal is failure containment  
-• clean and infected are domain outcomes not transport errors  
-• concurrency protection is out of scope in v0.3  
-• controlled rejection is preferred over unsafe acceptance
+### Notes
+- Introduces **storage as an enforcement layer**
+- Removes implicit trust in application state
+- Enables deterministic behavior under scanner failure
 
+---
 
-## v0.4 Observability and finalize race safety
+## [post9-v0.1.0]
 
-Scope
-• persistent upload event log table upload_events for observability  
-• events emitted using event_name field
+### Added
+- Full infrastructure baseline using Docker Compose:
+  - MySQL 8.0
+  - Redis 7
+  - RabbitMQ 3.12
+  - Nginx + PHP-FPM
+  - Scanner service
+- Health checks across core services
+- k6 load testing for runtime validation
 
-Event names
-• upload.initiated  
-• upload.finalized  
-• upload.failed  
+### Notes
+- First transition from logical correctness → real runtime conditions
+- Validates system behavior under concurrent traffic
+- No guarantees beyond single-node runtime realism
 
-Scan lifecycle events
-• upload.scan.started  
-• upload.scan.completed  
-• upload.scan.failed  
+---
 
-Failure reasons
-• failure reasons are restricted to the values defined in docs/failure-reasons.md
-• free-form reason values are not allowed
+## [post8-v0.4.1]
 
+### Changed
+- Infected files treated as terminal finalize state
+- Event contract aligned with deterministic finalize guarantees
+- Finalize logic hardened for consistency under failure
 
-• classify scanner network failures as scanner_unavailable:
-  • DNS failure  
-  • connection refused  
-  • connect timeout  
-  • read timeout
+---
 
-• finalize filesystem lock to prevent concurrent finalize races  
-• reproducible scripts for batch uploads and failure simulations  
-• SQL metric queries derived from upload_events table
+## [v0.4]
 
-Malware handling
-• infected is a terminal finalize status (infected files are finalized deterministically but never published)
-• infected is a state, not a failure reason
+### Added
+- `upload_events` table for full observability
+- Deterministic finalize locking to prevent race conditions
+- Structured event emission:
+  - upload lifecycle
+  - scan lifecycle
+- SQL-based metric derivation
 
-Explicit non goals
-• no global upload state machine
-• no retry or queueing of failed scans
-• no aggregation tables or precomputed metrics
+### Notes
+- System becomes **auditable**
+- Metrics derived from events, not assumptions
 
-Metric query examples
+---
 
-Total uploads initiated per day:
+## [v0.3]
 
-SELECT
-  DATE(created_at) AS day,
-  COUNT(*) AS count
-FROM upload_events
-WHERE event_name = 'upload.initiated'
-GROUP BY DATE(created_at)
-ORDER BY day DESC;
+### Added
+- External scanner service (Node.js + ClamAV)
+- Streaming scan via INSTREAM protocol
+- Backpressure control via concurrency limits
+- Timeout enforcement for scan operations
 
+### Failure Behavior
+- Scanner unavailable → finalize fails (`scanner_unavailable`)
+- Timeout → finalize fails (`scan_timeout`)
+- Backpressure → immediate rejection (`scanner_busy`)
 
-Finalize success counts:
-Counts are derived from persisted events and not pre-aggregated.
+### Notes
+- Introduces failure containment boundary
+- Rejects unsafe conditions instead of masking them
 
-SELECT
-  SUM(CASE WHEN event_name = 'upload.finalized' THEN 1 ELSE 0 END) AS success,
-  SUM(CASE WHEN event_name = 'upload.failed' THEN 1 ELSE 0 END) AS failed
-FROM upload_events;
+---
 
+## [v0.2]
 
-Scanner failure reasons distribution:
+### Added
+- Finalize endpoint
+- Chunk assembly into single file
+- File size validation against declared metadata
+- Cleanup of temporary chunk files
 
-SELECT
-  reason,
-  COUNT(*) AS count
-FROM upload_events
-WHERE event_name = 'upload.scan.failed'
-GROUP BY reason
-ORDER BY count DESC;
+### Notes
+- Ensures correctness of file assembly
+- No safety guarantees yet
 
+---
 
+## [v0.1]
 
-Notes
-• v0.4 turns the upload flow into an auditable system  
-• lock behavior must be deterministic under double finalize  
-• metrics are derived only from persisted events
-• for a given upload_id, exactly one finalize outcome must exist per finalize attempt
+### Added
+- Upload session initialization
+- Chunked file ingestion
+- Temporary storage handling
 
-## post8-v0.4.1
-- Implement infected files as terminal finalize state
-- Enforced event contract alignment with v0.4 guarantees
-- Hardened finalize determinism
+### Notes
+- Baseline request lifecycle only
+- No guarantees for integrity, safety, or reliability
