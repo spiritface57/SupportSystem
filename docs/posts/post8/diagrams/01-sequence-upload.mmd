@@ -1,0 +1,43 @@
+sequenceDiagram
+  autonumber
+  participant C as Client
+  participant API as API (Laravel)
+  participant FS as Storage (local/MinIO later)
+  participant SC as Scanner (Node/ClamAV)
+  participant DB as MySQL (upload_events)
+
+  C->>API: POST /upload/init (filename,total_bytes,chunk_bytes)
+  API->>FS: write meta.json (uploads-meta/{id})
+  API->>DB: emit upload.initiated
+  API-->>C: {upload_id, contract}
+
+  loop for each chunk i
+    C->>API: POST /upload/chunk (upload_id,index,chunk)
+    API->>FS: write uploads/{id}/{i}.part
+    API->>DB: emit upload.chunk.received
+    API-->>C: received
+  end
+
+  C->>API: POST /upload/finalize (upload_id,filename,total_bytes)
+  API->>FS: validate expected chunks (meta-driven)
+  API->>FS: assemble tmp/{id}/assembled.bin
+  API->>DB: emit upload.scan.started
+  API->>SC: stream assembled.bin to /scan
+  alt Scanner OK + clean
+    SC-->>API: {status:clean}
+    API->>DB: emit upload.scan.completed(clean)
+    API->>FS: move to final/uploads/{id}/{filename}
+    API->>DB: emit upload.finalized(status=clean)
+    API-->>C: status=clean + path
+  else Scanner unavailable OR protocol error
+    API->>DB: emit upload.scan.failed(scanner_unavailable)
+    API->>FS: move to quarantine/uploads/{id}/{filename}
+    API->>DB: emit upload.finalized(status=pending_scan)
+    API-->>C: status=pending_scan
+  else Scanner OK + infected
+    SC-->>API: {status:infected, signature}
+    API->>DB: emit upload.scan.completed(infected)
+    API->>FS: move to quarantine/uploads/{id}/{filename}
+    API->>DB: emit upload.finalized(status=infected)
+    API-->>C: status=infected
+  end

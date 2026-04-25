@@ -1,0 +1,14 @@
+stateDiagram-v2
+  [*] --> initiated
+  initiated --> chunking: upload.chunk.received*
+  chunking --> finalize_in_progress: upload/finalize
+  finalize_in_progress --> clean_published: scan=clean
+  finalize_in_progress --> quarantined_pending_scan: scanner_degraded
+  finalize_in_progress --> quarantined_infected: scan=infected
+
+  quarantined_pending_scan --> clean_published: rescan worker => clean (upload.published)
+  quarantined_pending_scan --> quarantined_infected: rescan worker => infected
+  quarantined_pending_scan --> quarantined_pending_scan: scanner degraded (retry later)
+
+  clean_published --> [*]
+  quarantined_infected --> [*]

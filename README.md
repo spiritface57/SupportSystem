@@ -1,152 +1,114 @@
-# SupportSystem — On-Prem File Upload & Scanning Architecture
+# SupportSystem --- On-Prem File Upload & Scanning Architecture
 
-A constraint-driven backend system for handling large file ingestion, validation,
-and malware scanning under real failure conditions.
+A constraint-driven backend system for handling large file ingestion,
+validation, and malware scanning under real failure conditions.
 
-This project is built incrementally. Each stage introduces a new architectural
-guarantee and is validated under actual runtime constraints.
+This project evolves through explicit system guarantees --- not feature
+accumulation.
 
----
+------------------------------------------------------------------------
 
 ## System Evolution
 
-This repository is structured as an evolving system, not a single static implementation.
+This repository represents a staged architecture:
 
-- **Post 8 — Deterministic Finalization**
-  - Finalize does NOT depend on scanner availability
-  - Scanner failure degrades state, but never blocks ingestion
+-   **Post 8 --- Deterministic Finalization**
+    -   Finalize does NOT depend on scanner availability
+    -   Scanner failure degrades state but never blocks ingestion
+-   **Post 9 --- Infrastructure as a Contract**
+    -   Real runtime dependencies (MySQL, Redis, RabbitMQ)
+    -   Behavior validated under load (k6)
+-   **Post 10 --- Storage as a Contract**
+    -   Introduces storage-domain separation:
+        -   final (trusted)
+        -   quarantine (untrusted)
+        -   transient (local)
+    -   Storage enforces system behavior
 
-- **Post 9 — Infrastructure as a Contract**
-  - Introduced real runtime dependencies (MySQL, Redis, RabbitMQ)
-  - Validated behavior under actual load (k6)
+------------------------------------------------------------------------
 
-- **Post 10 — Storage as a Contract**
-  - Separated storage domains:
-    - final (trusted)
-    - quarantine (untrusted)
-    - transient (local)
-  - Storage enforces system behavior
+## Core Idea
 
----
+> Storage is not where data lives.\
+> Storage is where system behavior is enforced.
 
-## Branches
+Post 10 introduces storage as a **first-class system boundary**, not an
+implementation detail.
 
-Each branch represents a specific architectural milestone:
-
-```
-feature/file-pipeline-hardening      → Post 8
-feature/post9-infra-baseline         → Post 9
-feature/post10-storage-separation    → Post 10
-```
-
-Switch branches to explore each stage:
-
-```bash
-git checkout feature/post10-storage-separation
-```
-
----
+------------------------------------------------------------------------
 
 ## Architecture Overview
 
 The system is composed of independent services:
 
-- **API (Laravel)**
-  - Upload orchestration
-  - Chunk handling
-  - Finalization logic
+-   **API (Laravel)**
+    -   Upload orchestration
+    -   Chunk handling
+    -   Finalization logic
+-   **Scanner (Node.js + ClamAV)**
+    -   Streaming malware detection
+    -   Failure isolation
+-   **Infrastructure**
+    -   MySQL (persistence)
+    -   Redis (cache / queue)
+    -   RabbitMQ (future guarantees)
+    -   MinIO (object storage)
 
-- **Scanner (Node.js + ClamAV)**
-  - Streaming malware detection
-  - Failure isolation
+------------------------------------------------------------------------
 
-- **Worker (Go)**
-  - Background processing (future stages)
+## Core Guarantees
 
-- **Infrastructure**
-  - MySQL (persistence)
-  - Redis (cache / queue)
-  - RabbitMQ (future event guarantees)
-  - MinIO (object storage)
+-   finalize never blocks
+-   unsafe files never become publishable
+-   storage domains enforce visibility
+-   failure does not break determinism
+-   behavior is observable and testable
 
----
+------------------------------------------------------------------------
 
-## Core Principles
+## Storage Model (Post 10)
 
-This system is designed around strict constraints:
+-   **Transient (local)**
+    -   temporary processing only
+    -   cleaned after finalize
+-   **Final (object storage)**
+    -   clean, publishable files
+-   **Quarantine (object storage)**
+    -   infected / pending / unsafe files
 
-- fully on-prem deployment  
-- no external cloud dependencies  
-- bounded resource usage  
-- failure isolation  
-- deterministic behavior under failure  
+### Finalize routing
 
----
+clean → final infected → quarantine unavailable → quarantine
+(pending_scan)
 
-## Guarantees
-
-Across all stages, the system evolves toward:
-
-- non-blocking upload pipeline  
-- safe handling of untrusted files  
-- deterministic finalization behavior  
-- explicit storage boundaries  
-- measurable runtime behavior  
-
----
+------------------------------------------------------------------------
 
 ## Getting Started
 
-Start the full system:
+docker compose up -d --build docker compose ps
 
-```bash
-docker compose up -d --build
-```
+### Test upload
 
-Verify services:
+bash scripts/services/api/file-upload-scan/upload_one_file.sh\
+scripts/services/api/file-upload-scan/files/a.png
 
-```bash
-docker compose ps
-```
+------------------------------------------------------------------------
 
-Run a sample upload:
+## Deep Dive
 
-```bash
-bash scripts/services/api/file-upload-scan/upload_one_file.sh scripts/services/api/file-upload-scan/files/a.png
-```
-
----
-
-## Technical Deep Dive
-
-Full architecture, implementation details, and validation scenarios are available in:
-
-```
 docs/posts/
-```
 
----
-
-## Related Articles
-
-This repository is paired with a LinkedIn series:
-
-- Post 8 — Deterministic Finalization
-- Post 9 — Infrastructure as a Contract
-- Post 10 — Storage as a Contract
-
----
+------------------------------------------------------------------------
 
 ## Summary
 
-This project is not about building features.
+This system is not built by adding features.
 
-It is about enforcing guarantees.
+It is built by removing ambiguity and enforcing guarantees.
 
-Each stage removes implicit assumptions and replaces them with
-explicit, testable system behavior.
+Each stage replaces assumptions with explicit, testable behavior.
 
----
+------------------------------------------------------------------------
 
 ## License
 

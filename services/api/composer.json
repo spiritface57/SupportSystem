@@ -9,6 +9,7 @@
         "php": "^8.2",
         "laravel/framework": "^12.0",
         "laravel/sanctum": "^4.0",
+        "league/flysystem-aws-s3-v3": "^3.25",
         "laravel/tinker": "^2.10.1"
     },
     "require-dev": {
@@ -75,6 +76,9 @@
     },
     "config": {
         "optimize-autoloader": true,
+        "platform": {
+            "php": "8.3.0"
+        },
         "preferred-install": "dist",
         "sort-packages": true,
         "allow-plugins": {

@@ -1,0 +1,29 @@
+flowchart TB
+  subgraph Host["Docker Host (Compose)"]
+    subgraph WebC["web (nginx)"]
+      Web["Nginx :80"]
+    end
+    subgraph PhpC["php (php-fpm + Laravel)"]
+      PHP["Laravel App"]
+      Storage["Local FS (storage/)"]
+    end
+    subgraph DbC["mysql"]
+      MySQL["MySQL 8.0 :3306"]
+    end
+    subgraph RedisC["redis"]
+      Redis["Redis 7 :6379"]
+    end
+    subgraph RabbitC["rabbitmq"]
+      Rabbit["RabbitMQ 3.12 :5672/15672"]
+    end
+    subgraph ScanC["scanner"]
+      Scanner["Scanner Service :3001"]
+    end
+  end
+
+  Client["Client Browser"] --> Web --> PHP
+  PHP --> MySQL
+  PHP --> Redis
+  PHP -. "provisioned" .-> Rabbit
+  PHP --> Storage
+  PHP --> Scanner

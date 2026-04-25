@@ -2,7 +2,7 @@
 ## On-Prem Support Platform
 
 Version: v0.1  
-Last Updated: 2026-01-03
+Last Updated: 2026-02-12
 
 ---
 
@@ -23,10 +23,12 @@ Last Updated: 2026-01-03
 
 ### Post 9
 - Infrastructure Baseline (DB, cache, queue, storage)
+- Docker Compose baseline + env defaults
 
 ### Post 10
-- Storage separation (MinIO)
-- Lifecycle policies
+- Storage responsibility separation
+- MinIO-backed final/quarantine domains
+- Versioning and lifecycle policy for durable artifacts
 
 ---
 

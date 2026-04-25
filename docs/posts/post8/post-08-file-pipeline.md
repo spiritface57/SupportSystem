@@ -238,6 +238,41 @@ This is the “decoupling” principle: scanner failure becomes a recoverable pr
 - atomically move `file.tmp` into `final/<filename>` (same filesystem)
 - set state `finalized` or `clean` (depending on whether scan already passed)
 
+## 8.6 Finalize concurrency (proof)
+
+Finalize is designed to be safe under real multi-process concurrency.
+
+To validate this, a deterministic concurrency test was executed under
+nginx + php-fpm with multiple workers enabled.
+
+The test forces two finalize requests for the same `upload_id`
+to overlap in time, using an explicit barrier inside the finalize path.
+
+Observed behavior:
+
+- The first finalize call acquires the lock and blocks before commit.
+- A concurrent finalize attempt, arriving before commit, fails with:
+
+  `finalize_in_progress`
+
+- After the first finalize commits successfully, any subsequent finalize
+  attempt fails deterministically with:
+
+  `finalize_locked (duplicate_finalize)`
+
+This proves that:
+
+- Finalize is mutually exclusive per `upload_id`
+- The lock is effective across multiple workers
+- Pre-commit and post-commit races are explicitly distinguishable
+- No duplicate or partial finalization is possible
+
+In local single-worker environments, `finalize_in_progress` may not be observable.
+This is an environment limitation, not a pipeline limitation.
+
+Under multi-worker execution, both outcomes are guaranteed and reproducible.
+
+
 ---
 
 ## 9) Failure taxonomy (stable error codes)
@@ -361,3 +396,25 @@ These are tracked in project position and roadmap. fileciteturn0file2tu
 - [ ] Atomic commit (rename/move)
 - [ ] Stable error taxonomy mapping
 - [ ] Acceptance tests for failure scenarios
+
+
+---
+
+## Implementation Status (v1.0 – Measured)
+
+Implements Post 8 file pipeline hardening and adds measured metrics.
+
+- Scanner hardened (clamd socket + streaming limits + supervisord ordering)
+- Finalize degrades safely to `pending_scan` + quarantine when scanner is down
+- Idempotent rescan worker publishes clean files later (`upload.published`)
+- Deterministic metrics runner: `scripts/metrics/post8-metrics-run.sh`
+- Metrics sample tracked: `services/api/docs/posts/post8/metrics-sample.md`
+- Generated output ignored: `services/api/docs/posts/post8/metrics-output.md`
+
+### Reproduce Metrics (Deterministic)
+This script resets the local environment, runs controlled upload batches,
+forces scanner degradation, and regenerates metrics deterministically.
+
+```bash
+RUNS_CLEAN=0 RUNS_PENDING=5 FILE_BYTES=1242880 CHUNK_BYTES=1048576 \
+  bash scripts/metrics/post8-metrics-run.sh
